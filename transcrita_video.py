@@ -50,8 +50,17 @@ def google_login_button():
     flow = create_flow()
     auth_url, _ = flow.authorization_url(prompt="consent")
     
-    # Google logo em base64
-    google_logo = st.image('imagens/logo_google.jpg')
+    # Carregando o logo do Google
+    google_logo_path = "imagens/logo_google.jpg"
+    
+    # Verificando se o arquivo existe
+    if os.path.exists(google_logo_path):
+        with open(google_logo_path, "rb") as f:
+            google_logo_base64 = base64.b64encode(f.read()).decode()
+    else:
+        st.error(f"Arquivo de logo não encontrado: {google_logo_path}")
+        return
+
     button_html = f"""
     <style>
     .google-btn {{
@@ -83,7 +92,7 @@ def google_login_button():
     }}
     </style>
     <a href="{auth_url}" class="google-btn">
-        <img src="{google_logo}" alt="Google logo">
+        <img src="data:image/jpeg;base64,{google_logo_base64}" alt="Google logo">
         <span>Fazer login com o Google</span>
     </a>
     """
