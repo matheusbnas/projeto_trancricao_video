@@ -1,0 +1,15 @@
+#variavel de ambiente
+.env
+.venv
+
+#Arquivos seguranca
+.secrets.toml
+
+#arquivo temporarios
+temp
+
+#arquivos de tests
+tests
+
+#arquivos exe
+ffmpeg.exe

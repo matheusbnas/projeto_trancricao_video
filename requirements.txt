@@ -1,0 +1,12 @@
+streamlit == 1.37.1
+google-api-python-client==2.142.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.1
+moviepy==1.0.3
+pydub == 0.25.1
+whisper == 1.1.10
+ipykernel
+openai
+python-dotenv
+streamlit_webrtc
+srt == 3.5.3
