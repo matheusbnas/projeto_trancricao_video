@@ -155,6 +155,11 @@ def formata_resumo_com_links(resumo, video_path):
             resumo_formatado += linha + "<br>"
     return resumo_formatado
 
+def logout():
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+
 def main():
     st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
 
@@ -175,7 +180,13 @@ def main():
         credentials = st.session_state.credentials
         service = build('oauth2', 'v2', credentials=credentials)
         user_info = service.userinfo().get().execute()
-        st.write(f"Logado como: {user_info['email']}")
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.write(f"Logado como: {user_info['email']}")
+        with col2:
+            if st.button("Logout"):
+                logout()
 
         uploaded_video = st.file_uploader("Faça upload do vídeo", type=['mp4', 'avi', 'mov'])
         uploaded_transcript = st.file_uploader("Faça upload da transcrição (opcional)", type=['srt'])
