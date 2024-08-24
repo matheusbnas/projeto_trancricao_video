@@ -79,6 +79,6 @@ Contribuições são bem-vindas! Por favor, sinta-se à vontade para submeter pu
 
 ## Contato
 
-Matheus Barbosa Nasimento - [Seu email ou outras informações de contato]
+Matheus Bernardes Costa do Nasimento - [E-mail](matheusbnas@gmail.com)
 
 Link do projeto: [https://github.com/matheusbnas/projeto_trancricao_video](https://github.com/matheusbnas/projeto_trancricao_video)
