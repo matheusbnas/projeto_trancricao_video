@@ -71,14 +71,30 @@ Este projeto é uma aplicação Streamlit que permite aos usuários fazer upload
 
 ## Contribuindo
 
-Contribuições são bem-vindas! Por favor, sinta-se à vontade para submeter pull requests ou abrir issues para reportar bugs ou sugerir melhorias.
+Contribuições são bem-vindas! Por favor, sinta-se à vontade para submeter pull requests ou abrir issues para reportar bugs ou sugerir melhorias. Note que, devido à natureza da licença, todas as contribuições estarão sujeitas aos mesmos termos de licenciamento.
 
 ## Licença
 
-[Inclua informações sobre a licença do seu projeto aqui]
+Este projeto está licenciado sob a Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International License (CC BY-NC-ND 4.0).
+
+Isso significa que você é livre para:
+- Compartilhar — copiar e redistribuir o material em qualquer suporte ou formato
+
+Sob as seguintes condições:
+- Atribuição — Você deve dar o crédito apropriado, fornecer um link para a licença e indicar se mudanças foram feitas. Você deve fazê-lo em qualquer circunstância razoável, mas de maneira alguma que sugira ao licenciante a apoiar você ou o seu uso.
+- Não Comercial — Você não pode usar o material para fins comerciais.
+- Sem Derivações — Se você remixar, transformar ou criar a partir do material, você não pode distribuir o material modificado.
+- Sem restrições adicionais — Você não pode aplicar termos jurídicos ou medidas de caráter tecnológico que restrinjam legalmente outros de fazerem algo que a licença permita.
+
+Para ver uma cópia desta licença, visite:
+[http://creativecommons.org/licenses/by-nc-nd/4.0/](http://creativecommons.org/licenses/by-nc-nd/4.0/)
+
+Para qualquer uso comercial ou modificações no projeto, entre em contato com o autor para obter permissão.
+
+© 2024 Matheus Bernardes Costa do Nascimento. Todos os direitos reservados.
 
 ## Contato
 
-Matheus Bernardes Costa do Nasimento - [E-mail](matheusbnas@gmail.com)
+Matheus Bernardes Costa do Nascimento - [E-mail](mailto:matheusbnas@gmail.com)
 
 Link do projeto: [https://github.com/matheusbnas/projeto_trancricao_video](https://github.com/matheusbnas/projeto_trancricao_video)
