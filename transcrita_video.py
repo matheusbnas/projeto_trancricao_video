@@ -180,6 +180,53 @@ def gera_resumo_e_transcricao(srt_content):
     
     return resumo_srt, srt_content  # Retornando resumo em SRT e transcrição completa em SRT
 
+def slice_video(video_file, max_size_mb=200):
+    """Divide o vídeo em partes menores se exceder o tamanho máximo."""
+    temp_dir = tempfile.mkdtemp()
+    temp_file = os.path.join(temp_dir, "temp_video.mp4")
+    
+    with open(temp_file, "wb") as f:
+        f.write(video_file.getbuffer())
+    
+    video = VideoFileClip(temp_file)
+    duration = video.duration
+    
+    if os.path.getsize(temp_file) <= max_size_mb * 1024 * 1024:
+        return [video]
+    
+    num_parts = int(os.path.getsize(temp_file) / (max_size_mb * 1024 * 1024)) + 1
+    part_duration = duration / num_parts
+    
+    video_parts = []
+    for i in range(num_parts):
+        start = i * part_duration
+        end = (i + 1) * part_duration
+        video_part = video.subclip(start, end)
+        video_parts.append(video_part)
+    
+    video.close()
+    os.remove(temp_file)
+    return video_parts
+
+def process_video_parts(video_parts):
+    """Processa cada parte do vídeo e combina os resultados."""
+    all_srt_content = ""
+    for i, part in enumerate(video_parts):
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        part.write_videofile(temp_file.name, codec="libx264")
+        part_srt = transcreve_audio(temp_file.name)
+        all_srt_content += adjust_srt_timestamps(part_srt, i * (part.duration))
+        os.unlink(temp_file.name)
+    return all_srt_content
+
+def adjust_srt_timestamps(srt_content, time_offset):
+    """Ajusta os timestamps do SRT com base no deslocamento de tempo."""
+    subtitles = list(srt.parse(srt_content))
+    for sub in subtitles:
+        sub.start += datetime.timedelta(seconds=time_offset)
+        sub.end += datetime.timedelta(seconds=time_offset)
+    return srt.compose(subtitles)
+
 def main():
     st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
 
@@ -213,9 +260,10 @@ def main():
 
     if uploaded_video:
         with st.spinner("Processando o vídeo..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_video.name.split('.')[-1]}") as temp_video:
-                temp_video.write(uploaded_video.getbuffer())
-                video_path = temp_video.name
+            video_parts = slice_video(uploaded_video)
+            
+            if len(video_parts) > 1:
+                st.info(f"O vídeo foi dividido em {len(video_parts)} partes para processamento.")
 
             srt_content = None
 
@@ -226,8 +274,7 @@ def main():
             else:
                 if st.button("Transcrever vídeo automaticamente"):
                     st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
-                    salva_audio_do_video(uploaded_video)
-                    srt_content = transcreve_audio(ARQUIVO_AUDIO_TEMP)
+                    srt_content = process_video_parts(video_parts)
                     if srt_content:
                         st.success("Transcrição automática concluída!")
                     else:
@@ -242,7 +289,7 @@ def main():
 
                 # Exibir resumo estilo tl;dv com links clicáveis
                 st.subheader("Resumo das Pautas Importantes:")
-                resumo_formatado = formata_resumo_com_links(resumo_srt, video_path)
+                resumo_formatado = formata_resumo_com_links(resumo_srt, video_parts[0].filename)
                 st.markdown(resumo_formatado, unsafe_allow_html=True)
 
                 # Adicionar JavaScript para controle do vídeo
@@ -280,10 +327,16 @@ def main():
 
                 # Exibir vídeo
                 st.subheader("Vídeo Original:")
-                st.video(video_path)
+                if len(video_parts) == 1:
+                    st.video(video_parts[0].filename)
+                else:
+                    st.warning("O vídeo foi dividido em partes. Exibindo a primeira parte.")
+                    st.video(video_parts[0].filename)
 
                 # Limpar os arquivos temporários
-                os.unlink(video_path)
+                for part in video_parts:
+                    if os.path.exists(part.filename):
+                        os.unlink(part.filename)
                 os.unlink(resumo_file.name)
                 os.unlink(transcript_file.name)
                 if os.path.exists(str(ARQUIVO_AUDIO_TEMP)):
