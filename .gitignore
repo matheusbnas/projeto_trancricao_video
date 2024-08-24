@@ -3,7 +3,7 @@
 .venv
 
 #Arquivos seguranca
-.streamlit
+.secrets.toml
 
 #arquivo temporarios
 temp
