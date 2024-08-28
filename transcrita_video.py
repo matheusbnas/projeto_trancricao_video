@@ -12,6 +12,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import srt
 import datetime
+import shutil
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -109,12 +110,6 @@ def transcreve_audio(caminho_audio, prompt=""):
         )
         return transcricao
 
-def salva_audio_do_video(video_bytes):
-    with open(ARQUIVO_VIDEO_TEMP, mode='wb') as video_f:
-        video_f.write(video_bytes.read())
-    moviepy_video = VideoFileClip(str(ARQUIVO_VIDEO_TEMP))
-    moviepy_video.audio.write_audiofile(str(ARQUIVO_AUDIO_TEMP))
-
 def gera_resumo_tldv(transcricao):
     resposta = client.chat.completions.create(
         model="gpt-3.5-turbo",
@@ -180,6 +175,26 @@ def gera_resumo_e_transcricao(srt_content):
     
     return resumo_srt, srt_content  # Retornando resumo em SRT e transcrição completa em SRT
 
+def process_video(video_path):
+    try:
+        audio_path = video_path.replace(".mp4", ".mp3")
+        with VideoFileClip(video_path) as video:
+            video.audio.write_audiofile(audio_path)
+        transcript = transcreve_audio(audio_path)
+        return transcript
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+
+def handle_video_upload(uploaded_file):
+    temp_dir = tempfile.mkdtemp()
+    temp_video_path = os.path.join(temp_dir, "temp_video.mp4")
+    
+    with open(temp_video_path, "wb") as f:
+        f.write(uploaded_file.getvalue())
+    
+    return temp_video_path, temp_dir
+
 def main():
     st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
 
@@ -212,82 +227,93 @@ def main():
     uploaded_transcript = st.file_uploader("Faça upload da transcrição (opcional, .txt)", type=['txt'])
 
     if uploaded_video:
+        file_size = uploaded_video.size
+        st.write(f"Tamanho do arquivo: {file_size / (1024 * 1024):.2f} MB")
+
         with st.spinner("Processando o vídeo..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_video.name.split('.')[-1]}") as temp_video:
-                temp_video.write(uploaded_video.getbuffer())
-                video_path = temp_video.name
+            try:
+                temp_video_path, temp_dir = handle_video_upload(uploaded_video)
 
-            srt_content = None
+                srt_content = None
 
-            if uploaded_transcript:
-                txt_content = uploaded_transcript.getvalue().decode("utf-8")
-                srt_content = txt_to_srt(txt_content)
-                st.success("Arquivo TXT convertido para SRT com sucesso!")
-            else:
-                if st.button("Transcrever vídeo automaticamente"):
-                    st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
-                    salva_audio_do_video(uploaded_video)
-                    srt_content = transcreve_audio(ARQUIVO_AUDIO_TEMP)
-                    if srt_content:
-                        st.success("Transcrição automática concluída!")
-                    else:
-                        st.error("Não foi possível realizar a transcrição automática. Por favor, verifique as dependências do projeto.")
+                if uploaded_transcript:
+                    txt_content = uploaded_transcript.getvalue().decode("utf-8")
+                    srt_content = txt_to_srt(txt_content)
+                    st.success("Arquivo TXT convertido para SRT com sucesso!")
                 else:
-                    st.warning("Nenhuma transcrição fornecida. Clique no botão acima para transcrever automaticamente.")
+                    if st.button("Transcrever vídeo automaticamente"):
+                        st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
+                        
+                        full_transcript = process_video(temp_video_path)
+                        
+                        srt_content = txt_to_srt(full_transcript)
+                        
+                        if srt_content:
+                            st.success("Transcrição automática concluída!")
+                        else:
+                            st.error("Não foi possível realizar a transcrição automática. Por favor, verifique as dependências do projeto.")
+                    else:
+                        st.warning("Nenhuma transcrição fornecida. Clique no botão acima para transcrever automaticamente.")
 
-            if srt_content:
-                resumo_srt, transcript_srt = gera_resumo_e_transcricao(srt_content)
+                if srt_content:
+                    resumo_srt, transcript_srt = gera_resumo_e_transcricao(srt_content)
 
-                st.success("Processamento concluído!")
+                    st.success("Processamento concluído!")
 
-                # Exibir resumo estilo tl;dv com links clicáveis
-                st.subheader("Resumo das Pautas Importantes:")
-                resumo_formatado = formata_resumo_com_links(resumo_srt, video_path)
-                st.markdown(resumo_formatado, unsafe_allow_html=True)
+                    # Exibir resumo estilo tl;dv com links clicáveis
+                    st.subheader("Resumo das Pautas Importantes:")
+                    resumo_formatado = formata_resumo_com_links(resumo_srt, temp_video_path)
+                    st.markdown(resumo_formatado, unsafe_allow_html=True)
 
-                # Adicionar JavaScript para controle do vídeo
-                st.markdown("""
-                <script>
-                function seekVideo(videoPath, seconds) {
-                    const video = document.querySelector('video[src="' + videoPath + '"]');
-                    if (video) {
-                        video.currentTime = seconds;
-                        video.play();
+                    # Adicionar JavaScript para controle do vídeo
+                    st.markdown("""
+                    <script>
+                    function seekVideo(videoPath, seconds) {
+                        const video = document.querySelector('video[src="' + videoPath + '"]');
+                        if (video) {
+                            video.currentTime = seconds;
+                            video.play();
+                        }
                     }
-                }
-                </script>
-                """, unsafe_allow_html=True)
+                    </script>
+                    """, unsafe_allow_html=True)
 
-                # Salvar o resumo em um arquivo temporário SRT
-                resumo_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
-                resumo_file.write(resumo_srt)
-                resumo_file.close()
+                    # Salvar o resumo em um arquivo temporário SRT
+                    resumo_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
+                    resumo_file.write(resumo_srt)
+                    resumo_file.close()
 
-                # Criar link de download para o resumo SRT
-                st.markdown(create_download_link(resumo_file.name, "Baixar resumo (SRT)"), unsafe_allow_html=True)
+                    # Criar link de download para o resumo SRT
+                    st.markdown(create_download_link(resumo_file.name, "Baixar resumo (SRT)"), unsafe_allow_html=True)
 
-                # Exibir transcrição completa
-                st.subheader("Transcrição Completa:")
-                st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
+                    # Exibir transcrição completa
+                    st.subheader("Transcrição Completa:")
+                    st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
 
-                # Salvar a transcrição completa em um arquivo temporário SRT
-                transcript_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
-                transcript_file.write(transcript_srt)
-                transcript_file.close()
+                    # Salvar a transcrição completa em um arquivo temporário SRT
+                    transcript_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
+                    transcript_file.write(transcript_srt)
+                    transcript_file.close()
 
-                # Criar link de download para a transcrição completa SRT
-                st.markdown(create_download_link(transcript_file.name, "Baixar transcrição completa (SRT)"), unsafe_allow_html=True)
+                    # Criar link de download para a transcrição completa SRT
+                    st.markdown(create_download_link(transcript_file.name, "Baixar transcrição completa (SRT)"), unsafe_allow_html=True)
 
-                # Exibir vídeo
-                st.subheader("Vídeo Original:")
-                st.video(video_path)
+                    # Exibir vídeo
+                    st.subheader("Vídeo Original:")
+                    st.video(temp_video_path)
 
+            except Exception as e:
+                st.error(f"Ocorreu um erro durante o processamento: {str(e)}")
+                logger.exception("Erro durante o processamento do vídeo")
+            
+            finally:
                 # Limpar os arquivos temporários
-                os.unlink(video_path)
-                os.unlink(resumo_file.name)
-                os.unlink(transcript_file.name)
-                if os.path.exists(str(ARQUIVO_AUDIO_TEMP)):
-                    os.unlink(str(ARQUIVO_AUDIO_TEMP))
+                if 'temp_dir' in locals():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                if 'resumo_file' in locals() and os.path.exists(resumo_file.name):
+                    os.remove(resumo_file.name)
+                if 'transcript_file' in locals() and os.path.exists(transcript_file.name):
+                    os.remove(transcript_file.name)
 
     else:
         st.warning("Por favor, faça upload de um vídeo para continuar.")
