@@ -27,78 +27,7 @@ PASTA_TEMP = Path(tempfile.gettempdir())
 ARQUIVO_AUDIO_TEMP = PASTA_TEMP / 'audio.mp3'
 ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
 
-# Configurações OAuth
-CLIENT_CONFIG = {
-    "web": {
-        "client_id": st.secrets["GOOGLE_CLIENT_ID"],
-        "client_secret": st.secrets["GOOGLE_CLIENT_SECRET"],
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "redirect_uris": [st.secrets["REDIRECT_URI"]],
-    }
-}
-
-SCOPES = ['https://www.googleapis.com/auth/userinfo.email', 'openid']
-
-def create_flow():
-    return Flow.from_client_config(
-        client_config=CLIENT_CONFIG,
-        scopes=SCOPES,
-        redirect_uri=CLIENT_CONFIG['web']['redirect_uris'][0]
-    )
-
-def google_login_button():
-    flow = create_flow()
-    auth_url, _ = flow.authorization_url(prompt="consent")
-    
-    # Carregando o logo do Google
-    google_logo_path = "imagens/logo_google.jpg"
-    
-    # Verificando se o arquivo existe
-    if os.path.exists(google_logo_path):
-        with open(google_logo_path, "rb") as f:
-            google_logo_base64 = base64.b64encode(f.read()).decode()
-    else:
-        st.error(f"Arquivo de logo não encontrado: {google_logo_path}")
-        return
-
-    button_html = f"""
-    <style>
-    .google-btn {{
-        display: inline-flex;
-        align-items: center;
-        background-color: white;
-        color: #757575;
-        border: 1px solid #dadce0;
-        border-radius: 4px;
-        padding: 0 12px;
-        font-size: 14px;
-        font-weight: 500;
-        font-family: 'Roboto', Arial, sans-serif;
-        cursor: pointer;
-        height: 40px;
-        text-decoration: none;
-    }}
-    .google-btn:hover {{
-        background-color: #f8f9fa;
-        border-color: #d2e3fc;
-    }}
-    .google-btn img {{
-        margin-right: 8px;
-        width: 18px;
-        height: 18px;
-    }}
-    .google-btn span {{
-        padding: 10px 0;
-    }}
-    </style>
-    <a href="{auth_url}" class="google-btn">
-        <img src="data:image/jpeg;base64,{google_logo_base64}" alt="Google logo">
-        <span>Fazer login com o Google</span>
-    </a>
-    """
-    st.markdown(button_html, unsafe_allow_html=True)
-
+@st.cache_data
 def transcreve_audio(caminho_audio, prompt=""):
     with open(caminho_audio, 'rb') as arquivo_audio:
         transcricao = client.audio.transcriptions.create(
@@ -110,6 +39,7 @@ def transcreve_audio(caminho_audio, prompt=""):
         )
         return transcricao
 
+@st.cache_data
 def gera_resumo_tldv(transcricao):
     resposta = client.chat.completions.create(
         model="gpt-3.5-turbo",
@@ -150,11 +80,6 @@ def formata_resumo_com_links(resumo, video_path):
             resumo_formatado += linha + "<br>"
     return resumo_formatado
 
-def logout():
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.rerun()
-
 def txt_to_srt(txt_content):
     lines = txt_content.split('\n')
     subtitles = []
@@ -186,54 +111,60 @@ def process_video(video_path):
         if os.path.exists(audio_path):
             os.remove(audio_path)
 
-def handle_video_upload(uploaded_file):
-    temp_dir = tempfile.mkdtemp()
-    temp_video_path = os.path.join(temp_dir, "temp_video.mp4")
+def process_video_chunk(chunk, chunk_number, total_chunks, session_id):
+    chunk_dir = PASTA_TEMP / session_id
+    chunk_dir.mkdir(exist_ok=True)
+    chunk_file = chunk_dir / f"chunk_{chunk_number}.mp4"
     
-    with open(temp_video_path, "wb") as f:
-        f.write(uploaded_file.getvalue())
+    with open(chunk_file, "wb") as f:
+        f.write(chunk)
     
-    return temp_video_path, temp_dir
+    if chunk_number == total_chunks - 1:
+        # Combinar todos os chunks
+        final_video = chunk_dir / "final_video.mp4"
+        with open(final_video, "wb") as outfile:
+            for i in range(total_chunks):
+                chunk_file = chunk_dir / f"chunk_{i}.mp4"
+                outfile.write(chunk_file.read_bytes())
+                chunk_file.unlink()  # Remove o chunk após combinar
+        
+        return str(final_video)
+    return None
 
 def main():
+    st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
     st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
 
-    if 'credentials' not in st.session_state:
-        st.session_state.credentials = None
-
-    if st.session_state.credentials is None:
-        st.write("Por favor, faça login com sua conta do Google para continuar.")
-        google_login_button()
-        
-        if 'code' in st.query_params:
-            code = st.query_params['code']
-            flow = create_flow()
-            flow.fetch_token(code=code)
-            st.session_state.credentials = flow.credentials
-            st.rerun()
-    else:
-        credentials = st.session_state.credentials
-        service = build('oauth2', 'v2', credentials=credentials)
-        user_info = service.userinfo().get().execute()
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.write(f"Logado como: {user_info['email']}")
-        with col2:
-            if st.button("Logout"):
-                logout()
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = hashlib.md5(str(datetime.datetime.now()).encode()).hexdigest()
 
     uploaded_video = st.file_uploader("Faça upload do vídeo", type=['mp4', 'avi', 'mov'])
     uploaded_transcript = st.file_uploader("Faça upload da transcrição (opcional, .txt)", type=['txt'])
-
+    
     if uploaded_video:
         file_size = uploaded_video.size
         st.write(f"Tamanho do arquivo: {file_size / (1024 * 1024):.2f} MB")
 
-        with st.spinner("Processando o vídeo..."):
-            try:
-                temp_video_path, temp_dir = handle_video_upload(uploaded_video)
+        chunk_size = 200 * 1024 * 1024  # 5MB chunks
+        total_chunks = -(-file_size // chunk_size)  # Ceil division
 
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        final_video_path = None
+        for i in range(total_chunks):
+            status_text.text(f"Fazendo upload do chunk {i+1}/{total_chunks}")
+            start = i * chunk_size
+            end = min((i + 1) * chunk_size, file_size)
+            chunk = uploaded_video.read(end - start)
+            result = process_video_chunk(chunk, i, total_chunks, st.session_state.session_id)
+            if result:
+                final_video_path = result
+            progress_bar.progress((i + 1) / total_chunks)
+
+        if final_video_path:
+            status_text.text("Processando o vídeo...")
+            try:
                 srt_content = None
 
                 if uploaded_transcript:
@@ -243,10 +174,8 @@ def main():
                 else:
                     if st.button("Transcrever vídeo automaticamente"):
                         st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
-                        
-                        full_transcript = process_video(temp_video_path)
-                        
-                        srt_content = txt_to_srt(full_transcript)
+                        transcript = process_video(final_video_path)
+                        srt_content = transcript
                         
                         if srt_content:
                             st.success("Transcrição automática concluída!")
@@ -262,7 +191,7 @@ def main():
 
                     # Exibir resumo estilo tl;dv com links clicáveis
                     st.subheader("Resumo das Pautas Importantes:")
-                    resumo_formatado = formata_resumo_com_links(resumo_srt, temp_video_path)
+                    resumo_formatado = formata_resumo_com_links(resumo_srt, final_video_path)
                     st.markdown(resumo_formatado, unsafe_allow_html=True)
 
                     # Adicionar JavaScript para controle do vídeo
@@ -300,7 +229,7 @@ def main():
 
                     # Exibir vídeo
                     st.subheader("Vídeo Original:")
-                    st.video(temp_video_path)
+                    st.video(final_video_path)
 
             except Exception as e:
                 st.error(f"Ocorreu um erro durante o processamento: {str(e)}")
@@ -308,8 +237,7 @@ def main():
             
             finally:
                 # Limpar os arquivos temporários
-                if 'temp_dir' in locals():
-                    shutil.rmtree(temp_dir, ignore_errors=True)
+                shutil.rmtree(PASTA_TEMP / st.session_state.session_id, ignore_errors=True)
                 if 'resumo_file' in locals() and os.path.exists(resumo_file.name):
                     os.remove(resumo_file.name)
                 if 'transcript_file' in locals() and os.path.exists(transcript_file.name):
