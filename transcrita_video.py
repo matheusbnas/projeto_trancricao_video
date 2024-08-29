@@ -3,7 +3,7 @@ import re
 import openai
 from pathlib import Path
 import tempfile
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, AudioFileClip
 import os
 import base64
 import logging
@@ -13,6 +13,7 @@ from googleapiclient.discovery import build
 import srt
 import datetime
 import shutil
+import hashlib
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -27,9 +28,26 @@ PASTA_TEMP = Path(tempfile.gettempdir())
 ARQUIVO_AUDIO_TEMP = PASTA_TEMP / 'audio.mp3'
 ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
 
+MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
+
+def split_audio(audio_path, chunk_duration=300):  # 5 minutos por chunk
+    audio = AudioFileClip(audio_path)
+    duration = audio.duration
+    chunks = []
+    
+    for start in range(0, int(duration), chunk_duration):
+        end = min(start + chunk_duration, duration)
+        chunk = audio.subclip(start, end)
+        chunk_path = f"{audio_path}_{start}_{end}.mp3"
+        chunk.write_audiofile(chunk_path)
+        chunks.append(chunk_path)
+    
+    audio.close()
+    return chunks
+
 @st.cache_data
-def transcreve_audio(caminho_audio, prompt=""):
-    with open(caminho_audio, 'rb') as arquivo_audio:
+def transcreve_audio_chunk(chunk_path, prompt=""):
+    with open(chunk_path, 'rb') as arquivo_audio:
         transcricao = client.audio.transcriptions.create(
             model='whisper-1',
             language='pt',
@@ -105,11 +123,22 @@ def process_video(video_path):
         audio_path = video_path.replace(".mp4", ".mp3")
         with VideoFileClip(video_path) as video:
             video.audio.write_audiofile(audio_path)
-        transcript = transcreve_audio(audio_path)
-        return transcript
+        
+        audio_chunks = split_audio(audio_path)
+        full_transcript = ""
+        
+        for chunk in audio_chunks:
+            chunk_transcript = transcreve_audio_chunk(chunk)
+            full_transcript += chunk_transcript + "\n\n"
+            os.remove(chunk)  # Remove o chunk de áudio após a transcrição
+        
+        return full_transcript
     finally:
         if os.path.exists(audio_path):
-            os.remove(audio_path)
+            try:
+                os.remove(audio_path)
+            except PermissionError:
+                logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {audio_path}")
 
 def process_video_chunk(chunk, chunk_number, total_chunks, session_id):
     chunk_dir = PASTA_TEMP / session_id
@@ -145,7 +174,7 @@ def main():
         file_size = uploaded_video.size
         st.write(f"Tamanho do arquivo: {file_size / (1024 * 1024):.2f} MB")
 
-        chunk_size = 200 * 1024 * 1024  # 5MB chunks
+        chunk_size = 200 * 1024 * 1024  # 200MB chunks
         total_chunks = -(-file_size // chunk_size)  # Ceil division
 
         progress_bar = st.progress(0)
@@ -174,13 +203,17 @@ def main():
                 else:
                     if st.button("Transcrever vídeo automaticamente"):
                         st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
-                        transcript = process_video(final_video_path)
-                        srt_content = transcript
-                        
-                        if srt_content:
-                            st.success("Transcrição automática concluída!")
-                        else:
-                            st.error("Não foi possível realizar a transcrição automática. Por favor, verifique as dependências do projeto.")
+                        try:
+                            transcript = process_video(final_video_path)
+                            srt_content = transcript
+                            
+                            if srt_content:
+                                st.success("Transcrição automática concluída!")
+                            else:
+                                st.error("Não foi possível realizar a transcrição automática. Por favor, verifique as dependências do projeto.")
+                        except Exception as e:
+                            st.error(f"Erro durante a transcrição: {str(e)}")
+                            logger.exception("Erro durante a transcrição do vídeo")
                     else:
                         st.warning("Nenhuma transcrição fornecida. Clique no botão acima para transcrever automaticamente.")
 
@@ -236,12 +269,20 @@ def main():
                 logger.exception("Erro durante o processamento do vídeo")
             
             finally:
-                # Limpar os arquivos temporários
-                shutil.rmtree(PASTA_TEMP / st.session_state.session_id, ignore_errors=True)
-                if 'resumo_file' in locals() and os.path.exists(resumo_file.name):
-                    os.remove(resumo_file.name)
-                if 'transcript_file' in locals() and os.path.exists(transcript_file.name):
-                    os.remove(transcript_file.name)
+                # Limpar os arquivos temporários, exceto o vídeo final
+                try:
+                    for item in os.listdir(PASTA_TEMP / st.session_state.session_id):
+                        if item != "final_video.mp4":
+                            os.remove(PASTA_TEMP / st.session_state.session_id / item)
+                except Exception as e:
+                    logger.warning(f"Não foi possível remover todos os arquivos temporários: {str(e)}")
+
+                for file in ['resumo_file', 'transcript_file']:
+                    if file in locals() and os.path.exists(locals()[file].name):
+                        try:
+                            os.remove(locals()[file].name)
+                        except Exception as e:
+                            logger.warning(f"Não foi possível remover o arquivo temporário {file}: {str(e)}")
 
     else:
         st.warning("Por favor, faça upload de um vídeo para continuar.")
