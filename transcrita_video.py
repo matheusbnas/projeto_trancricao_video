@@ -40,7 +40,7 @@ def split_audio(audio_path, chunk_duration=300):  # 5 minutos por chunk
         chunk = audio.subclip(start, end)
         chunk_path = f"{audio_path}_{start}_{end}.mp3"
         chunk.write_audiofile(chunk_path)
-        chunks.append(chunk_path)
+        chunks.append((chunk_path, start))
     
     audio.close()
     return chunks
@@ -56,6 +56,13 @@ def transcreve_audio_chunk(chunk_path, prompt=""):
             prompt=prompt,
         )
         return transcricao
+
+def ajusta_tempo_srt(srt_content, offset):
+    subtitles = list(srt.parse(srt_content))
+    for sub in subtitles:
+        sub.start += datetime.timedelta(seconds=offset)
+        sub.end += datetime.timedelta(seconds=offset)
+    return srt.compose(subtitles)
 
 @st.cache_data
 def gera_resumo_tldv(transcricao):
@@ -127,10 +134,11 @@ def process_video(video_path):
         audio_chunks = split_audio(audio_path)
         full_transcript = ""
         
-        for chunk in audio_chunks:
-            chunk_transcript = transcreve_audio_chunk(chunk)
-            full_transcript += chunk_transcript + "\n\n"
-            os.remove(chunk)  # Remove o chunk de áudio após a transcrição
+        for chunk_path, start_time in audio_chunks:
+            chunk_transcript = transcreve_audio_chunk(chunk_path)
+            adjusted_transcript = ajusta_tempo_srt(chunk_transcript, start_time)
+            full_transcript += adjusted_transcript + "\n\n"
+            os.remove(chunk_path)  # Remove o chunk de áudio após a transcrição
         
         return full_transcript
     finally:
