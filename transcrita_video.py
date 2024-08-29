@@ -3,7 +3,7 @@ import re
 import openai
 from pathlib import Path
 import tempfile
-from moviepy.editor import VideoFileClip, AudioFileClip
+from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip
 import os
 import base64
 import logging
@@ -29,6 +29,17 @@ ARQUIVO_AUDIO_TEMP = PASTA_TEMP / 'audio.mp3'
 ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
 
 MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
+
+# Função para configurar o slidebar
+def config_slidebar():
+    st.sidebar.header("Configurações")
+    model = st.sidebar.selectbox(
+        "Modelo OpenAI",
+        ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "gpt-4o-mini"]
+    )
+    max_tokens = st.sidebar.slider("Máximo de Tokens", 100, 4000, 1000)
+    temperature = st.sidebar.slider("Temperatura", 0.0, 1.0, 0.7)
+    return model, max_tokens, temperature
 
 def split_audio(audio_path, chunk_duration=300):  # 5 minutos por chunk
     audio = AudioFileClip(audio_path)
@@ -65,13 +76,15 @@ def ajusta_tempo_srt(srt_content, offset):
     return srt.compose(subtitles)
 
 @st.cache_data
-def gera_resumo_tldv(transcricao):
+def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
     resposta = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model=model,
         messages=[
             {"role": "system", "content": "Você é um assistente especializado em criar resumos concisos e informativos no estilo do aplicativo tl;dv. Identifique e resuma as pautas mais importantes do vídeo, incluindo timestamps precisos."},
             {"role": "user", "content": f"Crie um resumo das pautas mais importantes desta transcrição, no formato do tl;dv. Inclua timestamps precisos (minutos:segundos) e tópicos chave. Formato desejado: '[MM:SS] - Tópico: Descrição breve':\n\n{transcricao}"}
-        ]
+        ],
+        max_tokens=max_tokens,
+        temperature=temperature
     )
     return resposta.choices[0].message.content
 
@@ -116,9 +129,9 @@ def txt_to_srt(txt_content):
             subtitles.append(subtitle)
     return srt.compose(subtitles)
 
-def gera_resumo_e_transcricao(srt_content):
+def gera_resumo_e_transcricao(srt_content, model, max_tokens, temperature):
     transcript_text = processa_srt(srt_content)
-    resumo_tldv = gera_resumo_tldv(transcript_text)
+    resumo_tldv = gera_resumo_tldv(transcript_text, model, max_tokens, temperature)
     
     # Convertendo o resumo para formato SRT
     resumo_srt = txt_to_srt(resumo_tldv)
@@ -168,9 +181,29 @@ def process_video_chunk(chunk, chunk_number, total_chunks, session_id):
         return str(final_video)
     return None
 
+def add_subtitles_to_video(video_path, srt_content, output_path):
+    video = VideoFileClip(video_path)
+    subtitles = list(srt.parse(srt_content))
+    
+    def make_textclip(txt):
+        return TextClip(txt, font='Arial', fontsize=24, color='white', bg_color='black', size=(video.w, None))
+    
+    subtitle_clips = []
+    for sub in subtitles:
+        start_time = sub.start.total_seconds()
+        end_time = sub.end.total_seconds()
+        subtitle_clip = make_textclip(sub.content).set_start(start_time).set_end(end_time).set_position(('center', 'bottom'))
+        subtitle_clips.append(subtitle_clip)
+    
+    final_video = CompositeVideoClip([video] + subtitle_clips)
+    final_video.write_videofile(output_path)
+
 def main():
     st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
     st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
+
+    # Configurar o slidebar
+    model, max_tokens, temperature = config_slidebar()
 
     if 'session_id' not in st.session_state:
         st.session_state.session_id = hashlib.md5(str(datetime.datetime.now()).encode()).hexdigest()
@@ -226,7 +259,7 @@ def main():
                         st.warning("Nenhuma transcrição fornecida. Clique no botão acima para transcrever automaticamente.")
 
                 if srt_content:
-                    resumo_srt, transcript_srt = gera_resumo_e_transcricao(srt_content)
+                    resumo_srt, transcript_srt = gera_resumo_e_transcricao(srt_content, model, max_tokens, temperature)
 
                     st.success("Processamento concluído!")
 
@@ -272,15 +305,22 @@ def main():
                     st.subheader("Vídeo Original:")
                     st.video(final_video_path)
 
+                    # Adicionar legendas ao vídeo
+                    video_com_legenda_path = str(PASTA_TEMP / f"{st.session_state.session_id}_video_com_legenda.mp4")
+                    add_subtitles_to_video(final_video_path, transcript_srt, video_com_legenda_path)
+
+                    # Criar link de download para o vídeo com legendas
+                    st.markdown(create_download_link(video_com_legenda_path, "Baixar vídeo com legendas (MP4)"), unsafe_allow_html=True)
+
             except Exception as e:
                 st.error(f"Ocorreu um erro durante o processamento: {str(e)}")
                 logger.exception("Erro durante o processamento do vídeo")
             
             finally:
-                # Limpar os arquivos temporários, exceto o vídeo final
+                # Limpar os arquivos temporários, exceto o vídeo final e o vídeo com legendas
                 try:
                     for item in os.listdir(PASTA_TEMP / st.session_state.session_id):
-                        if item != "final_video.mp4":
+                        if item not in ["final_video.mp4", f"{st.session_state.session_id}_video_com_legenda.mp4"]:
                             os.remove(PASTA_TEMP / st.session_state.session_id / item)
                 except Exception as e:
                     logger.warning(f"Não foi possível remover todos os arquivos temporários: {str(e)}")
