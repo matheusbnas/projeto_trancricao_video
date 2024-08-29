@@ -14,6 +14,8 @@ import srt
 import datetime
 import shutil
 import hashlib
+import os
+os.environ['IMAGEMAGICK_BINARY'] = r"C:\Program Files\ImageMagick-7.0.10-Q16-HDRI\magick.exe"  # Ajuste o caminho conforme necessário
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -35,9 +37,9 @@ def config_slidebar():
     st.sidebar.header("Configurações")
     model = st.sidebar.selectbox(
         "Modelo OpenAI",
-        ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo-preview", "gpt-4o-mini"]
+        ["gpt-4o-mini", "gpt-4o-mini-2024-07-18"]
     )
-    max_tokens = st.sidebar.slider("Máximo de Tokens", 100, 4000, 1000)
+    max_tokens = st.sidebar.slider("Máximo de Tokens", 4000, 10000, 16000)
     temperature = st.sidebar.slider("Temperatura", 0.0, 1.0, 0.7)
     return model, max_tokens, temperature
 
