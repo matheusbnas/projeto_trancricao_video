@@ -1,6 +1,7 @@
 import streamlit as st
 import re
-import openai
+from openai import OpenAI
+from dotenv import load_dotenv, find_dotenv
 from pathlib import Path
 import tempfile
 from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip
@@ -15,15 +16,17 @@ import datetime
 import shutil
 import hashlib
 import os
-os.environ['IMAGEMAGICK_BINARY'] = r"C:\Program Files\ImageMagick-7.0.10-Q16-HDRI\magick.exe"  # Ajuste o caminho conforme necessário
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configurar cliente OpenAI
-openai.api_key = st.secrets["OPENAI_API_KEY"]
-client = openai.OpenAI()
+# openai.api_key = st.secrets["OPENAI_API_KEY"]
+client = OpenAI()
+
+# Load environment variables
+_ = load_dotenv(find_dotenv())
 
 # Configurar pastas temporárias
 PASTA_TEMP = Path(tempfile.gettempdir())
@@ -32,15 +35,86 @@ ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
 
 MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
 
+st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
+
+def validate_openai_api_key(api_key):
+    try:
+        test_client = OpenAI(api_key=api_key)
+        test_client.models.list()
+        return True
+    except Exception as e:
+        st.error(f"Erro ao validar a chave API do OpenAI: {str(e)}")
+        return False
+
+def check_password():
+    if "authentication_status" not in st.session_state:
+        st.session_state["authentication_status"] = False
+
+    if not st.session_state["authentication_status"]:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        openai_api_key = st.text_input("OpenAI API Key", type="password")
+
+        if st.button("Login"):
+            if username in st.secrets["users"]:
+                if st.secrets["users"][username]["password"] == password:
+                    if validate_openai_api_key(openai_api_key):
+                        st.session_state["authentication_status"] = True
+                        st.session_state["username"] = username
+                        st.session_state["user_role"] = st.secrets["users"][username]["role"]
+                        st.session_state["openai_api_key"] = openai_api_key
+                        global client
+                        client = OpenAI(api_key=openai_api_key)
+                        st.success("Login com sucesso")
+                        return True
+                    else:
+                        st.error("Chave da OpenAI API inválida")
+                else:
+                    st.error("Senha inválida")
+            else:
+                st.error("Usuário não encontrado")
+        return False
+    return True
+
 # Função para configurar o slidebar
-def config_slidebar():
-    st.sidebar.header("Configurações")
-    model = st.sidebar.selectbox(
-        "Modelo OpenAI",
-        ["gpt-4o-mini", "gpt-4o-mini-2024-07-18"]
-    )
-    max_tokens = st.sidebar.slider("Máximo de Tokens", 4000, 10000, 16000)
-    temperature = st.sidebar.slider("Temperatura", 0.0, 1.0, 0.7)
+def sidebar():
+    if 'sidebar_state' not in st.session_state:
+        st.session_state.sidebar_state = {
+            'model': "gpt-4o-mini",
+            'max_tokens': 16000,
+            'temperature': 0.7
+        }
+
+    with st.sidebar:
+        st.header("Configurações")
+        
+        # Usando st.session_state para manter o estado do modelo selecionado
+        model = st.selectbox(
+            "Modelo OpenAI",
+            ["gpt-4o-mini", "gpt-4o-mini-2024-07-18"],
+            key="model_selectbox",
+            index=["gpt-4o-mini", "gpt-4o-mini-2024-07-18"].index(st.session_state.sidebar_state['model'])
+        )
+        
+        # Atualizando o estado imediatamente após a seleção
+        st.session_state.sidebar_state['model'] = model
+        
+        max_tokens = st.slider(
+            "Máximo de Tokens", 
+            4000, 10000, 
+            st.session_state.sidebar_state['max_tokens'],
+            key="max_tokens_slider"
+        )
+        st.session_state.sidebar_state['max_tokens'] = max_tokens
+        
+        temperature = st.slider(
+            "Temperatura", 
+            0.0, 1.0, 
+            st.session_state.sidebar_state['temperature'],
+            key="temperature_slider"
+        )
+        st.session_state.sidebar_state['temperature'] = temperature
+
     return model, max_tokens, temperature
 
 def split_audio(audio_path, chunk_duration=300):  # 5 minutos por chunk
@@ -200,12 +274,8 @@ def add_subtitles_to_video(video_path, srt_content, output_path):
     final_video = CompositeVideoClip([video] + subtitle_clips)
     final_video.write_videofile(output_path)
 
-def main():
-    st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
+def page(model, max_tokens, temperature):
     st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
-
-    # Configurar o slidebar
-    model, max_tokens, temperature = config_slidebar()
 
     if 'session_id' not in st.session_state:
         st.session_state.session_id = hashlib.md5(str(datetime.datetime.now()).encode()).hexdigest()
@@ -336,6 +406,19 @@ def main():
 
     else:
         st.warning("Por favor, faça upload de um vídeo para continuar.")
+
+def main():
+    if check_password():
+        # Sempre renderizar a sidebar
+        model, max_tokens, temperature = sidebar()
+        
+        # Atualizar o estado da sessão com as configurações mais recentes
+        st.session_state.sidebar_config = (model, max_tokens, temperature)
+        
+        # Chamar a página principal com as configurações atualizadas
+        page(model, max_tokens, temperature)
+    else:
+        st.warning("Você não tem permissão para acessar essa página.")
 
 if __name__ == "__main__":
     main()
