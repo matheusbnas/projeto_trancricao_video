@@ -10,3 +10,4 @@ openai
 python-dotenv
 streamlit_webrtc
 srt == 3.5.3
+reportlab==4.2.2

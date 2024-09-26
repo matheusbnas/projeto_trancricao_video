@@ -15,7 +15,11 @@ import srt
 import datetime
 import shutil
 import hashlib
-import os
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from io import BytesIO
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -313,22 +317,25 @@ def process_video_chunk(chunk, chunk_number, total_chunks, session_id):
         return str(final_video)
     return None
 
-def add_subtitles_to_video(video_path, srt_content, output_path):
-    video = VideoFileClip(video_path)
-    subtitles = list(srt.parse(srt_content))
-    
-    def make_textclip(txt):
-        return TextClip(txt, font='Arial', fontsize=24, color='white', bg_color='black', size=(video.w, None))
-    
-    subtitle_clips = []
-    for sub in subtitles:
-        start_time = sub.start.total_seconds()
-        end_time = sub.end.total_seconds()
-        subtitle_clip = make_textclip(sub.content).set_start(start_time).set_end(end_time).set_position(('center', 'bottom'))
-        subtitle_clips.append(subtitle_clip)
-    
-    final_video = CompositeVideoClip([video] + subtitle_clips)
-    final_video.write_videofile(output_path)
+def create_pdf(content, filename):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    flowables = []
+
+    for line in content.split('\n'):
+        p = Paragraph(line, styles['Normal'])
+        flowables.append(p)
+        flowables.append(Spacer(1, 12))
+
+    doc.build(flowables)
+    buffer.seek(0)
+    return buffer
+
+def create_download_link_pdf(pdf_buffer, link_text, filename):
+    b64 = base64.b64encode(pdf_buffer.getvalue()).decode()
+    href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">{link_text}</a>'
+    return href
 
 def page(model, max_tokens, temperature):
     st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
@@ -396,6 +403,14 @@ def page(model, max_tokens, temperature):
                     resumo_formatado = formata_resumo_com_links(resumo_srt, final_video_path)
                     st.markdown(resumo_formatado, unsafe_allow_html=True)
 
+                    # Exibir transcrição completa
+                    st.subheader("Transcrição Completa:")
+                    st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
+
+                    # Exibir vídeo
+                    st.subheader("Vídeo Original:")
+                    st.video(final_video_path)
+
                     # Adicionar JavaScript para controle do vídeo
                     st.markdown("""
                     <script>
@@ -409,29 +424,35 @@ def page(model, max_tokens, temperature):
                     </script>
                     """, unsafe_allow_html=True)
 
-                    # Salvar o resumo em um arquivo temporário SRT
-                    resumo_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
-                    resumo_file.write(resumo_srt)
-                    resumo_file.close()
+                    # Criar PDFs e SRTs
+                    resumo_pdf = create_pdf(processa_srt(resumo_srt), "resumo.pdf")
+                    transcript_pdf = create_pdf(processa_srt(transcript_srt), "transcricao_completa.pdf")
+                    
+                    resumo_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
+                    resumo_srt_file.write(resumo_srt)
+                    resumo_srt_file.close()
+                    
+                    transcript_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
+                    transcript_srt_file.write(transcript_srt)
+                    transcript_srt_file.close()
 
-                    # Criar link de download para o resumo SRT
-                    st.markdown(create_download_link(resumo_file.name, "Baixar resumo (SRT)"), unsafe_allow_html=True)
+                    # Criar abas para download
+                    st.subheader("Download dos Arquivos")
+                    tab1, tab2 = st.tabs(["Resumo", "Transcrição Completa"])
+                    
+                    with tab1:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown(create_download_link_pdf(resumo_pdf, "Baixar Resumo (PDF)", "resumo.pdf"), unsafe_allow_html=True)
+                        with col2:
+                            st.markdown(create_download_link(resumo_srt_file.name, "Baixar Resumo (SRT)"), unsafe_allow_html=True)
 
-                    # Exibir transcrição completa
-                    st.subheader("Transcrição Completa:")
-                    st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
-
-                    # Salvar a transcrição completa em um arquivo temporário SRT
-                    transcript_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
-                    transcript_file.write(transcript_srt)
-                    transcript_file.close()
-
-                    # Criar link de download para a transcrição completa SRT
-                    st.markdown(create_download_link(transcript_file.name, "Baixar transcrição completa (SRT)"), unsafe_allow_html=True)
-
-                    # Exibir vídeo
-                    st.subheader("Vídeo Original:")
-                    st.video(final_video_path)
+                    with tab2:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown(create_download_link_pdf(transcript_pdf, "Baixar Transcrição Completa (PDF)", "transcricao_completa.pdf"), unsafe_allow_html=True)
+                        with col2:
+                            st.markdown(create_download_link(transcript_srt_file.name, "Baixar Transcrição Completa (SRT)"), unsafe_allow_html=True)
 
             except Exception as e:
                 st.error(f"Ocorreu um erro durante o processamento: {str(e)}")
@@ -446,7 +467,7 @@ def page(model, max_tokens, temperature):
                 except Exception as e:
                     logger.warning(f"Não foi possível remover todos os arquivos temporários: {str(e)}")
 
-                for file in ['resumo_file', 'transcript_file']:
+                for file in ['resumo_srt_file', 'transcript_srt_file']:
                     if file in locals() and os.path.exists(locals()[file].name):
                         try:
                             os.remove(locals()[file].name)
