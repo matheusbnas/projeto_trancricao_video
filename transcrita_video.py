@@ -175,16 +175,52 @@ def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
     if not client:
         return None
 
-    resposta = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": "Você é um assistente especializado em criar resumos concisos e informativos no estilo do aplicativo tl;dv. Identifique e resuma as pautas mais importantes do vídeo, incluindo timestamps precisos."},
-            {"role": "user", "content": f"Crie um resumo das pautas mais importantes desta transcrição, no formato do tl;dv. Inclua timestamps precisos (minutos:segundos) e tópicos chave. Formato desejado: '[MM:SS] - Tópico: Descrição breve':\n\n{transcricao}"}
-        ],
-        max_tokens=max_tokens,
-        temperature=temperature
-    )
-    return resposta.choices[0].message.content
+    # Preparar a transcrição com timestamps originais
+    linhas = transcricao.split('\n')
+    transcricao_com_timestamps = []
+    for i in range(0, len(linhas), 4):
+        if i+3 < len(linhas):
+            numero = linhas[i]
+            tempos = linhas[i+1]
+            conteudo = linhas[i+2]
+            transcricao_com_timestamps.append(f"{numero}\n{tempos}\n{conteudo}")
+
+    transcricao_formatada = "\n\n".join(transcricao_com_timestamps)
+
+    try:
+        resposta = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "Você é um assistente especializado em criar resumos concisos e informativos no estilo do aplicativo tl;dv. Identifique e resuma as pautas mais importantes do vídeo, mantendo o formato SRT original."},
+                {"role": "user", "content": f"Crie um resumo das pautas mais importantes desta transcrição, mantendo o formato SRT. Use os timestamps originais e tópicos chave. Mantenha o formato exato do SRT, incluindo números de sequência, timestamps e linhas em branco entre as entradas. Utilize apenas os timestamps fornecidos, não crie novos. Comece diretamente com o número 1 e o primeiro timestamp:\n\n{transcricao_formatada}"}
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
+        
+        resumo = resposta.choices[0].message.content
+        
+        # Verificar se o resumo está no formato SRT
+        if not re.match(r'^\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n', resumo):
+            # Se não estiver no formato SRT, forçar a formatação
+            linhas_resumo = resumo.split('\n')
+            resumo_formatado = []
+            for i, linha in enumerate(linhas_resumo):
+                if linha.strip():
+                    tempo_inicio = f"00:{i:02d}:00,000"
+                    tempo_fim = f"00:{i+1:02d}:00,000"
+                    resumo_formatado.extend([
+                        str(i+1),
+                        f"{tempo_inicio} --> {tempo_fim}",
+                        linha,
+                        ""
+                    ])
+            resumo = "\n".join(resumo_formatado).strip()
+        
+        return resumo
+    except Exception as e:
+        st.error(f"Erro ao gerar resumo: {str(e)}")
+        return None
 
 def processa_srt(srt_content):
     subtitles = list(srt.parse(srt_content))
@@ -201,19 +237,17 @@ def create_download_link(file_path, link_text):
     href = f'<a href="data:file/txt;base64,{b64}" download="{os.path.basename(file_path)}">{link_text}</a>'
     return href
 
-def formata_resumo_com_links(resumo, video_path):
-    linhas = resumo.split('\n')
+def formata_resumo_com_links(resumo_srt, video_path):
+    subtitles = list(srt.parse(resumo_srt))
     resumo_formatado = ""
-    for linha in linhas:
-        match = re.match(r'\[(\d{2}:\d{2})\] - (.+)', linha)
-        if match:
-            timestamp = match.group(1)
-            conteudo = match.group(2)
-            segundos = sum(int(x) * 60 ** i for i, x in enumerate(reversed(timestamp.split(':'))))
-            link = f'<a href="#" onclick="seekVideo(\'{video_path}\', {segundos}); return false;">[{timestamp}]</a>'
-            resumo_formatado += f"{link} - {conteudo}<br>"
-        else:
-            resumo_formatado += linha + "<br>"
+    for sub in subtitles:
+        # Converter timedelta para segundos
+        segundos_totais = int(sub.start.total_seconds())
+        # Formatar o timestamp manualmente
+        minutos, segundos = divmod(segundos_totais, 60)
+        timestamp = f"{minutos:02d}:{segundos:02d}"
+        link = f'<a href="#" onclick="seekVideo(\'{video_path}\', {segundos_totais}); return false;">[{timestamp}]</a>'
+        resumo_formatado += f"{link} - {sub.content}<br>"
     return resumo_formatado
 
 def txt_to_srt(txt_content):
@@ -228,11 +262,11 @@ def txt_to_srt(txt_content):
     return srt.compose(subtitles)
 
 def gera_resumo_e_transcricao(srt_content, model, max_tokens, temperature):
-    transcript_text = processa_srt(srt_content)
-    resumo_tldv = gera_resumo_tldv(transcript_text, model, max_tokens, temperature)
+    resumo_srt = gera_resumo_tldv(srt_content, model, max_tokens, temperature)
     
-    # Convertendo o resumo para formato SRT
-    resumo_srt = txt_to_srt(resumo_tldv)
+    if resumo_srt is None:
+        st.error("Não foi possível gerar o resumo. Por favor, tente novamente.")
+        return None, srt_content
     
     return resumo_srt, srt_content  # Retornando resumo em SRT e transcrição completa em SRT
 
@@ -399,22 +433,15 @@ def page(model, max_tokens, temperature):
                     st.subheader("Vídeo Original:")
                     st.video(final_video_path)
 
-                    # Adicionar legendas ao vídeo
-                    video_com_legenda_path = str(PASTA_TEMP / f"{st.session_state.session_id}_video_com_legenda.mp4")
-                    add_subtitles_to_video(final_video_path, transcript_srt, video_com_legenda_path)
-
-                    # Criar link de download para o vídeo com legendas
-                    st.markdown(create_download_link(video_com_legenda_path, "Baixar vídeo com legendas (MP4)"), unsafe_allow_html=True)
-
             except Exception as e:
                 st.error(f"Ocorreu um erro durante o processamento: {str(e)}")
                 logger.exception("Erro durante o processamento do vídeo")
             
             finally:
-                # Limpar os arquivos temporários, exceto o vídeo final e o vídeo com legendas
+                # Limpar os arquivos temporários
                 try:
                     for item in os.listdir(PASTA_TEMP / st.session_state.session_id):
-                        if item not in ["final_video.mp4", f"{st.session_state.session_id}_video_com_legenda.mp4"]:
+                        if item != "final_video.mp4":
                             os.remove(PASTA_TEMP / st.session_state.session_id / item)
                 except Exception as e:
                     logger.warning(f"Não foi possível remover todos os arquivos temporários: {str(e)}")
