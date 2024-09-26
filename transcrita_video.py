@@ -37,6 +37,9 @@ MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
 
 st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
 
+def get_openai_api_key():
+    return st.session_state.get("openai_api_key")
+
 def validate_openai_api_key(api_key):
     try:
         test_client = OpenAI(api_key=api_key)
@@ -78,42 +81,41 @@ def check_password():
 
 # Função para configurar o slidebar
 def sidebar():
-    if 'sidebar_state' not in st.session_state:
-        st.session_state.sidebar_state = {
-            'model': "gpt-4o-mini",
-            'max_tokens': 16000,
-            'temperature': 0.7
-        }
-
     with st.sidebar:
-        st.header("Configurações")
-        
-        # Usando st.session_state para manter o estado do modelo selecionado
+        st.image("images/logo_google.jpg", width=200)
+        st.title("Assistente de Transcrição de Vídeo")
+        st.header("SEJA BEM VINDO!")
+        st.write(f"Olá, {st.session_state.get('username', 'Usuário')}!")
+
+        # Configurações do modelo OpenAI
+        st.write("**Ajuste de parâmetros do modelo da OpenAI**")
         model = st.selectbox(
             "Modelo OpenAI",
             ["gpt-4o-mini", "gpt-4o-mini-2024-07-18"],
-            key="model_selectbox",
-            index=["gpt-4o-mini", "gpt-4o-mini-2024-07-18"].index(st.session_state.sidebar_state['model'])
+            key="model_selectbox"
         )
-        
-        # Atualizando o estado imediatamente após a seleção
-        st.session_state.sidebar_state['model'] = model
-        
         max_tokens = st.slider(
             "Máximo de Tokens", 
             4000, 10000, 
-            st.session_state.sidebar_state['max_tokens'],
+            16000,
             key="max_tokens_slider"
         )
-        st.session_state.sidebar_state['max_tokens'] = max_tokens
-        
         temperature = st.slider(
             "Temperatura", 
             0.0, 1.0, 
-            st.session_state.sidebar_state['temperature'],
+            0.7,
             key="temperature_slider"
         )
-        st.session_state.sidebar_state['temperature'] = temperature
+
+        if st.button("Logout"):
+            st.session_state["authentication_status"] = False
+            st.session_state["openai_api_key"] = None
+            st.session_state["username"] = None
+            st.session_state["user_role"] = None
+            st.rerun()
+
+        st.markdown("[Matheus Bernardes](https://www.linkedin.com/in/matheusbnas)")
+        st.markdown("Desenvolvido por [Matech 3D](https://matech3d.com.br/)")
 
     return model, max_tokens, temperature
 
