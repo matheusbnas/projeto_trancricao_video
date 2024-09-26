@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Configurar cliente OpenAI
 # openai.api_key = st.secrets["OPENAI_API_KEY"]
-client = OpenAI()
+#client = OpenAI()
 
 # Load environment variables
 _ = load_dotenv(find_dotenv())
@@ -36,6 +36,20 @@ ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
 MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
 
 st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
+
+# Remova ou comente esta linha
+# client = OpenAI()
+
+# Adicione esta função para obter o cliente OpenAI
+def get_openai_client():
+    if "openai_client" not in st.session_state:
+        api_key = st.session_state.get("openai_api_key")
+        if api_key:
+            st.session_state.openai_client = OpenAI(api_key=api_key)
+        else:
+            st.error("Chave da API OpenAI não encontrada. Por favor, faça login novamente.")
+            return None
+    return st.session_state.openai_client
 
 def get_openai_api_key():
     return st.session_state.get("openai_api_key")
@@ -66,8 +80,6 @@ def check_password():
                         st.session_state["username"] = username
                         st.session_state["user_role"] = st.secrets["users"][username]["role"]
                         st.session_state["openai_api_key"] = openai_api_key
-                        global client
-                        client = OpenAI(api_key=openai_api_key)
                         st.success("Login com sucesso")
                         return True
                     else:
@@ -136,6 +148,10 @@ def split_audio(audio_path, chunk_duration=300):  # 5 minutos por chunk
 
 @st.cache_data
 def transcreve_audio_chunk(chunk_path, prompt=""):
+    client = get_openai_client()
+    if not client:
+        return None
+
     with open(chunk_path, 'rb') as arquivo_audio:
         transcricao = client.audio.transcriptions.create(
             model='whisper-1',
@@ -155,6 +171,10 @@ def ajusta_tempo_srt(srt_content, offset):
 
 @st.cache_data
 def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
+    client = get_openai_client()
+    if not client:
+        return None
+
     resposta = client.chat.completions.create(
         model=model,
         messages=[
