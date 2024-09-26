@@ -398,18 +398,18 @@ def page(model, max_tokens, temperature):
 
                     st.success("Processamento concluído!")
 
-                    # Exibir resumo estilo tl;dv com links clicáveis
-                    st.subheader("Resumo das Pautas Importantes:")
-                    resumo_formatado = formata_resumo_com_links(resumo_srt, final_video_path)
-                    st.markdown(resumo_formatado, unsafe_allow_html=True)
+                    # Criar abas para o conteúdo
+                    tab1, tab2, tab3 = st.tabs(["Vídeo Original", "Resumo das Pautas Importantes", "Transcrição Completa"])
+                    
+                    with tab1:
+                        st.video(final_video_path)
 
-                    # Exibir transcrição completa
-                    st.subheader("Transcrição Completa:")
-                    st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
+                    with tab2:
+                        resumo_formatado = formata_resumo_com_links(resumo_srt, final_video_path)
+                        st.markdown(resumo_formatado, unsafe_allow_html=True)
 
-                    # Exibir vídeo
-                    st.subheader("Vídeo Original:")
-                    st.video(final_video_path)
+                    with tab3:
+                        st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
 
                     # Adicionar JavaScript para controle do vídeo
                     st.markdown("""
