@@ -11,4 +11,4 @@ python-dotenv
 streamlit_webrtc
 srt == 3.5.3
 reportlab==4.2.2
-PyVimeo=1.1.2
+PyVimeo==1.1.2
