@@ -20,6 +20,12 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from io import BytesIO
+import vimeo
+import requests
+from io import BytesIO
+from pydub import AudioSegment
+import os
+from openai import OpenAI
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +44,23 @@ ARQUIVO_AUDIO_TEMP = PASTA_TEMP / 'audio.mp3'
 ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
 
 MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
+
+# Configurações do Vimeo (você precisará criar estas variáveis de ambiente)
+# VIMEO_ACCESS_TOKEN = os.getenv('VIMEO_ACCESS_TOKEN')
+# VIMEO_CLIENT_ID = os.getenv('VIMEO_CLIENT_ID')
+# VIMEO_CLIENT_SECRET = os.getenv('VIMEO_CLIENT_SECRET')
+
+# Configurações do Vimeo
+VIMEO_ACCESS_TOKEN = st.secrets["VIMEO_ACCESS_TOKEN"]
+VIMEO_CLIENT_ID = st.secrets["VIMEO_CLIENT_ID"]
+VIMEO_CLIENT_SECRET = st.secrets["VIMEO_CLIENT_SECRET"]
+
+# Inicializar cliente Vimeo
+vimeo_client = vimeo.VimeoClient(
+    token=VIMEO_ACCESS_TOKEN,
+    key=VIMEO_CLIENT_ID,
+    secret=VIMEO_CLIENT_SECRET
+)
 
 st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
 
@@ -179,49 +202,50 @@ def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
     if not client:
         return None
 
-    # Preparar a transcrição com timestamps originais
-    linhas = transcricao.split('\n')
-    transcricao_com_timestamps = []
-    for i in range(0, len(linhas), 4):
-        if i+3 < len(linhas):
-            numero = linhas[i]
-            tempos = linhas[i+1]
-            conteudo = linhas[i+2]
-            transcricao_com_timestamps.append(f"{numero}\n{tempos}\n{conteudo}")
-
-    transcricao_formatada = "\n\n".join(transcricao_com_timestamps)
-
     try:
         resposta = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "Você é um assistente especializado em criar resumos concisos e informativos no estilo do aplicativo tl;dv. Identifique e resuma as pautas mais importantes do vídeo, mantendo o formato SRT original."},
-                {"role": "user", "content": f"Crie um resumo das pautas mais importantes desta transcrição, mantendo o formato SRT. Use os timestamps originais e tópicos chave. Mantenha o formato exato do SRT, incluindo números de sequência, timestamps e linhas em branco entre as entradas. Utilize apenas os timestamps fornecidos, não crie novos. Comece diretamente com o número 1 e o primeiro timestamp:\n\n{transcricao_formatada}"}
+                {"role": "system", "content": "Você é um assistente especializado em criar resumos concisos e informativos no estilo do aplicativo tl;dv."},
+                {"role": "user", "content": f"""Crie um resumo desta transcrição no estilo tl;dv, seguindo estas diretrizes:
+                1. Identifique 10-15 pontos principais do conteúdo.
+                2. Para cada ponto, forneça um timestamp aproximado no formato [MM:SS].
+                3. Escreva uma breve descrição para cada ponto, começando com o timestamp.
+                4. Mantenha cada ponto conciso, mas informativo.
+                5. Cubra todo o conteúdo do vídeo, não apenas o início.
+                6. Apresente os pontos em ordem cronológica.
+
+                Exemplo do formato desejado:
+                [00:00] - Introdução: Breve descrição do tópico introdutório.
+                [05:30] - Ponto principal 2: Descrição do segundo ponto importante.
+                [10:15] - Discussão sobre X: Breve resumo da discussão sobre X.
+
+                Transcrição:
+                {transcricao}"""}
             ],
             max_tokens=max_tokens,
             temperature=temperature
         )
         
-        resumo = resposta.choices[0].message.content
+        resumo_bruto = resposta.choices[0].message.content
         
-        # Verificar se o resumo está no formato SRT
-        if not re.match(r'^\d+\n\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n', resumo):
-            # Se não estiver no formato SRT, forçar a formatação
-            linhas_resumo = resumo.split('\n')
-            resumo_formatado = []
-            for i, linha in enumerate(linhas_resumo):
-                if linha.strip():
-                    tempo_inicio = f"00:{i:02d}:00,000"
-                    tempo_fim = f"00:{i+1:02d}:00,000"
-                    resumo_formatado.extend([
-                        str(i+1),
-                        f"{tempo_inicio} --> {tempo_fim}",
-                        linha,
-                        ""
-                    ])
-            resumo = "\n".join(resumo_formatado).strip()
+        # Processar o resumo bruto para o formato SRT
+        pontos = re.findall(r'\[(\d{2}:\d{2})\] - (.*)', resumo_bruto)
+        resumo_formatado = []
         
-        return resumo
+        for i, (timestamp, conteudo) in enumerate(pontos, start=1):
+            minutos, segundos = map(int, timestamp.split(':'))
+            tempo_inicio = f"00:{minutos:02d}:{segundos:02d},000"
+            tempo_fim = f"00:{minutos:02d}:{segundos+59 if segundos < 1 else 59:02d},000"
+            
+            resumo_formatado.extend([
+                str(i),
+                f"{tempo_inicio} --> {tempo_fim}",
+                f"[{timestamp}] - {conteudo}",
+                ""
+            ])
+        
+        return "\n".join(resumo_formatado).strip()
     except Exception as e:
         st.error(f"Erro ao gerar resumo: {str(e)}")
         return None
