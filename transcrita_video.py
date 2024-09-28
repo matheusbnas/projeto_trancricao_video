@@ -22,10 +22,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from io import BytesIO
 import vimeo
 import requests
-from io import BytesIO
 from pydub import AudioSegment
-import os
-from openai import OpenAI
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -134,14 +131,14 @@ def sidebar():
             key="model_selectbox"
         )
         max_tokens = st.slider(
-            "Máximo de Tokens", 
-            4000, 10000, 
+            "Máximo de Tokens",
+            4000, 10000,
             16000,
             key="max_tokens_slider"
         )
         temperature = st.slider(
-            "Temperatura", 
-            0.0, 1.0, 
+            "Temperatura",
+            0.0, 1.0,
             0.7,
             key="temperature_slider"
         )
@@ -208,12 +205,13 @@ def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
             messages=[
                 {"role": "system", "content": "Você é um assistente especializado em criar resumos concisos e informativos no estilo do aplicativo tl;dv."},
                 {"role": "user", "content": f"""Crie um resumo desta transcrição no estilo tl;dv, seguindo estas diretrizes:
-                1. Identifique 10-15 pontos principais do conteúdo.
+                1. Identifique 20-30 pontos principais do conteúdo.
                 2. Para cada ponto, forneça um timestamp aproximado no formato [MM:SS].
                 3. Escreva uma breve descrição para cada ponto, começando com o timestamp.
-                4. Mantenha cada ponto conciso, mas informativo.
-                5. Cubra todo o conteúdo do vídeo, não apenas o início.
-                6. Apresente os pontos em ordem cronológica.
+                4. Não sobreponha nos timestamps de cada resumo.
+                5. Mantenha cada ponto conciso, mas informativo.
+                6. Cubra todo o conteúdo do vídeo, não apenas o início.
+                7. Apresente os pontos em ordem cronológica.
 
                 Exemplo do formato desejado:
                 [00:00] - Introdução: Breve descrição do tópico introdutório.
@@ -226,13 +224,10 @@ def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
             max_tokens=max_tokens,
             temperature=temperature
         )
-        
         resumo_bruto = resposta.choices[0].message.content
-        
         # Processar o resumo bruto para o formato SRT
         pontos = re.findall(r'\[(\d{2}:\d{2})\] - (.*)', resumo_bruto)
         resumo_formatado = []
-        
         for i, (timestamp, conteudo) in enumerate(pontos, start=1):
             minutos, segundos = map(int, timestamp.split(':'))
             tempo_inicio = f"00:{minutos:02d}:{segundos:02d},000"
@@ -337,9 +332,123 @@ def process_video_chunk(chunk, chunk_number, total_chunks, session_id):
                 chunk_file = chunk_dir / f"chunk_{i}.mp4"
                 outfile.write(chunk_file.read_bytes())
                 chunk_file.unlink()  # Remove o chunk após combinar
-        
         return str(final_video)
     return None
+
+def extrair_video_id(url):
+    match = re.search(r'vimeo.com/(\d+)', url)
+    if match:
+        return match.group(1)
+    else:
+        st.error("URL do Vimeo inválida")
+        return None
+
+def buscar_video_por_id(video_id):
+    response = vimeo_client.get(f"/videos/{video_id}")
+    if response.status_code == 200:
+        return response.json()
+    else:
+        st.error("Erro ao buscar o vídeo no Vimeo")
+        return None
+
+def exibir_video_vimeo(video_data):
+    titulo = video_data['name']
+    embed_url = video_data['embed']['html']
+    st.write(f"**{titulo}**")
+    st.markdown(embed_url, unsafe_allow_html=True)
+
+def get_vimeo_video_info(video_id):
+    try:
+        response = vimeo_client.get(f'/videos/{video_id}')
+        return response.json()
+    except Exception as e:
+        st.error(f"Erro ao obter informações do vídeo: {str(e)}")
+        return None
+
+def download_audio_from_vimeo(video_url):
+    try:
+        video_id = video_url.split('/')[-1]
+        video_info = get_vimeo_video_info(video_id)
+
+        if not video_info:
+            logger.error("Não foi possível obter informações do vídeo")
+            return None
+
+        # Procurar pelo link de download do vídeo
+        video_link = None
+        for file in video_info.get('download', []):
+            if file.get('quality') == 'sd':  # Escolhendo qualidade padrão para menor tamanho
+                video_link = file.get('link')
+                break
+
+        if not video_link:
+            logger.error("Não foi possível encontrar um link de vídeo para download")
+            return None
+
+        # Criar um arquivo temporário para o vídeo
+        temp_video_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        temp_video_path = temp_video_file.name
+        temp_video_file.close()
+
+        try:
+            # Fazer o download do vídeo
+            video_response = requests.get(video_link, stream=True)
+            video_response.raise_for_status()
+            with open(temp_video_path, 'wb') as video_file:
+                for chunk in video_response.iter_content(chunk_size=8192):
+                    video_file.write(chunk)
+
+            # Extrair o áudio do vídeo
+            video = VideoFileClip(temp_video_path)
+            audio = video.audio
+
+            # Criar um arquivo temporário para o áudio
+            temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+            temp_audio_path = temp_audio_file.name
+            temp_audio_file.close()
+
+            audio.write_audiofile(temp_audio_path)
+            video.close()
+
+            return temp_audio_path
+
+        finally:
+            # Limpar o arquivo de vídeo temporário
+            if os.path.exists(temp_video_path):
+                os.unlink(temp_video_path)
+
+    except Exception as e:
+        logger.exception(f"Erro ao processar o vídeo do Vimeo: {str(e)}")
+        return None
+
+def process_vimeo_video(vimeo_url, model, max_tokens, temperature):
+    audio_path = None
+    try:
+        with st.spinner("Baixando e extraindo áudio do vídeo do Vimeo..."):
+            audio_path = download_audio_from_vimeo(vimeo_url)
+        
+        if audio_path is None:
+            st.error("Não foi possível baixar o áudio do vídeo do Vimeo.")
+            return
+
+        with st.spinner("Transcrevendo áudio..."):
+            srt_content = process_video(audio_path)
+
+        if srt_content:
+            process_transcription(srt_content, model, max_tokens, temperature, vimeo_url)
+        else:
+            st.error("Não foi possível gerar a transcrição do áudio do Vimeo.")
+
+    except Exception as e:
+        logger.exception(f"Ocorreu um erro ao processar o vídeo do Vimeo: {str(e)}")
+        st.error(f"Ocorreu um erro ao processar o vídeo do Vimeo: {str(e)}")
+    finally:
+        # Limpar arquivo temporário
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+            except Exception as e:
+                logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {str(e)}")
 
 def create_pdf(content, filename):
     buffer = BytesIO()
@@ -367,10 +476,21 @@ def page(model, max_tokens, temperature):
     if 'session_id' not in st.session_state:
         st.session_state.session_id = hashlib.md5(str(datetime.datetime.now()).encode()).hexdigest()
 
-    uploaded_video = st.file_uploader("Faça upload do vídeo", type=['mp4', 'avi', 'mov'])
+    vimeo_url = st.text_input("URL do vídeo do Vimeo (opcional)")
+    uploaded_video = st.file_uploader("Ou faça upload do vídeo", type=['mp4', 'avi', 'mov'])
     uploaded_transcript = st.file_uploader("Faça upload da transcrição (opcional, .txt)", type=['txt'])
     
-    if uploaded_video:
+    if vimeo_url:
+        video_id = extrair_video_id(vimeo_url)
+        if video_id:
+            video_data = buscar_video_por_id(video_id)
+            if video_data:
+                exibir_video_vimeo(video_data)
+                if st.button("Processar vídeo do Vimeo"):
+                    process_vimeo_video(vimeo_url, model, max_tokens, temperature)
+            else:
+                st.error("Não foi possível obter informações do vídeo do Vimeo.")
+    elif uploaded_video:
         file_size = uploaded_video.size
         st.write(f"Tamanho do arquivo: {file_size / (1024 * 1024):.2f} MB")
 
@@ -404,8 +524,7 @@ def page(model, max_tokens, temperature):
                     if st.button("Transcrever vídeo automaticamente"):
                         st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
                         try:
-                            transcript = process_video(final_video_path)
-                            srt_content = transcript
+                            srt_content = process_video(final_video_path)
                             
                             if srt_content:
                                 st.success("Transcrição automática concluída!")
@@ -418,65 +537,7 @@ def page(model, max_tokens, temperature):
                         st.warning("Nenhuma transcrição fornecida. Clique no botão acima para transcrever automaticamente.")
 
                 if srt_content:
-                    resumo_srt, transcript_srt = gera_resumo_e_transcricao(srt_content, model, max_tokens, temperature)
-
-                    st.success("Processamento concluído!")
-
-                    # Criar abas para o conteúdo
-                    tab1, tab2, tab3 = st.tabs(["Vídeo Original", "Resumo das Pautas Importantes", "Transcrição Completa"])
-                    
-                    with tab1:
-                        st.video(final_video_path)
-
-                    with tab2:
-                        resumo_formatado = formata_resumo_com_links(resumo_srt, final_video_path)
-                        st.markdown(resumo_formatado, unsafe_allow_html=True)
-
-                    with tab3:
-                        st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
-
-                    # Adicionar JavaScript para controle do vídeo
-                    st.markdown("""
-                    <script>
-                    function seekVideo(videoPath, seconds) {
-                        const video = document.querySelector('video[src="' + videoPath + '"]');
-                        if (video) {
-                            video.currentTime = seconds;
-                            video.play();
-                        }
-                    }
-                    </script>
-                    """, unsafe_allow_html=True)
-
-                    # Criar PDFs e SRTs
-                    resumo_pdf = create_pdf(processa_srt(resumo_srt), "resumo.pdf")
-                    transcript_pdf = create_pdf(processa_srt(transcript_srt), "transcricao_completa.pdf")
-                    
-                    resumo_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
-                    resumo_srt_file.write(resumo_srt)
-                    resumo_srt_file.close()
-                    
-                    transcript_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
-                    transcript_srt_file.write(transcript_srt)
-                    transcript_srt_file.close()
-
-                    # Criar abas para download
-                    st.subheader("Download dos Arquivos")
-                    tab1, tab2 = st.tabs(["Resumo", "Transcrição Completa"])
-                    
-                    with tab1:
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown(create_download_link_pdf(resumo_pdf, "Baixar Resumo (PDF)", "resumo.pdf"), unsafe_allow_html=True)
-                        with col2:
-                            st.markdown(create_download_link(resumo_srt_file.name, "Baixar Resumo (SRT)"), unsafe_allow_html=True)
-
-                    with tab2:
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown(create_download_link_pdf(transcript_pdf, "Baixar Transcrição Completa (PDF)", "transcricao_completa.pdf"), unsafe_allow_html=True)
-                        with col2:
-                            st.markdown(create_download_link(transcript_srt_file.name, "Baixar Transcrição Completa (SRT)"), unsafe_allow_html=True)
+                    process_transcription(srt_content, model, max_tokens, temperature, final_video_path)
 
             except Exception as e:
                 st.error(f"Ocorreu um erro durante o processamento: {str(e)}")
@@ -491,24 +552,101 @@ def page(model, max_tokens, temperature):
                 except Exception as e:
                     logger.warning(f"Não foi possível remover todos os arquivos temporários: {str(e)}")
 
-                for file in ['resumo_srt_file', 'transcript_srt_file']:
-                    if file in locals() and os.path.exists(locals()[file].name):
-                        try:
-                            os.remove(locals()[file].name)
-                        except Exception as e:
-                            logger.warning(f"Não foi possível remover o arquivo temporário {file}: {str(e)}")
-
     else:
-        st.warning("Por favor, faça upload de um vídeo para continuar.")
+        st.warning("Por favor, insira uma URL do Vimeo ou faça upload de um vídeo para continuar.")
+
+    # Adicionar JavaScript para controle do vídeo
+    st.markdown("""
+    <script>
+    function seekVideo(videoPath, seconds) {
+        const video = document.querySelector('video[src="' + videoPath + '"]');
+        if (video) {
+            video.currentTime = seconds;
+            video.play();
+        }
+    }
+    </script>
+    """, unsafe_allow_html=True)
+
+def process_transcription(srt_content, model, max_tokens, temperature, video_path):
+    resumo_srt, transcript_srt = gera_resumo_e_transcricao(srt_content, model, max_tokens, temperature)
+
+    st.success("Processamento concluído!")
+
+    # Criar abas para o conteúdo
+    tab1, tab2, tab3 = st.tabs(["Vídeo Original", "Resumo das Pautas Importantes", "Transcrição Completa"])
+    
+    with tab1:
+        if video_path.startswith('http'):  # É uma URL do Vimeo
+            st.video(video_path)
+        else:  # É um arquivo local
+            st.video(video_path)
+
+    with tab2:
+        resumo_formatado = formata_resumo_com_links(resumo_srt, video_path)
+        st.markdown(resumo_formatado, unsafe_allow_html=True)
+
+    with tab3:
+        st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
+
+    # Adicionar JavaScript para controle do vídeo
+    st.markdown("""
+    <script>
+    function seekVideo(videoPath, seconds) {
+        const video = document.querySelector('video[src="' + videoPath + '"]');
+        if (video) {
+            video.currentTime = seconds;
+            video.play();
+        }
+    }
+    </script>
+    """, unsafe_allow_html=True)
+
+    # Criar PDFs e SRTs
+    resumo_pdf = create_pdf(processa_srt(resumo_srt), "resumo.pdf")
+    transcript_pdf = create_pdf(processa_srt(transcript_srt), "transcricao_completa.pdf")
+    
+    resumo_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
+    resumo_srt_file.write(resumo_srt)
+    resumo_srt_file.close()
+    
+    transcript_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
+    transcript_srt_file.write(transcript_srt)
+    transcript_srt_file.close()
+
+    # Criar abas para download
+    st.subheader("Download dos Arquivos")
+    tab1, tab2 = st.tabs(["Resumo", "Transcrição Completa"])
+    
+    with tab1:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(create_download_link_pdf(resumo_pdf, "Baixar Resumo (PDF)", "resumo.pdf"), unsafe_allow_html=True)
+        with col2:
+            st.markdown(create_download_link(resumo_srt_file.name, "Baixar Resumo (SRT)"), unsafe_allow_html=True)
+
+    with tab2:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(create_download_link_pdf(transcript_pdf, "Baixar Transcrição Completa (PDF)", "transcricao_completa.pdf"), unsafe_allow_html=True)
+        with col2:
+            st.markdown(create_download_link(transcript_srt_file.name, "Baixar Transcrição Completa (SRT)"), unsafe_allow_html=True)
+
+    # Limpar arquivos temporários
+    for file in [resumo_srt_file.name, transcript_srt_file.name]:
+        try:
+            os.remove(file)
+        except Exception as e:
+            logger.warning(f"Não foi possível remover o arquivo temporário {file}: {str(e)}")
 
 def main():
     if check_password():
         # Sempre renderizar a sidebar
         model, max_tokens, temperature = sidebar()
-        
+
         # Atualizar o estado da sessão com as configurações mais recentes
         st.session_state.sidebar_config = (model, max_tokens, temperature)
-        
+
         # Chamar a página principal com as configurações atualizadas
         page(model, max_tokens, temperature)
     else:
