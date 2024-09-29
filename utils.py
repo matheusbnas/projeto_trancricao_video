@@ -71,8 +71,8 @@ def extrair_video_id(url):
         return match.group(1)
     else:
         return None
-
-def download_audio_from_vimeo(video_url, vimeo_client):
+    
+def get_vimeo_video_link(video_url, vimeo_client):
     try:
         video_id = extrair_video_id(video_url)
         if not video_id:
@@ -82,38 +82,58 @@ def download_audio_from_vimeo(video_url, vimeo_client):
         if not video_info:
             return None
 
-        download_links = video_info.get('download', [])
-        if not download_links:
-            logger.error("Nenhum link de download disponível")
+        # Tentar obter o link do vídeo com a menor qualidade disponível
+        files = video_info.get('files', [])
+        video_link = min(files, key=lambda x: x.get('height', float('inf'))).get('link')
+
+        if video_link:
+            return video_link
+        else:
+            logger.error("Não foi possível encontrar um link de vídeo")
             return None
 
-        audio_link = next((file['link'] for file in download_links if file.get('type').startswith('audio/')), None)
-        if not audio_link:
-            video_link = min(download_links, key=lambda x: x.get('width', 0)).get('link')
-            if not video_link:
-                logger.error("Não foi possível encontrar um link de vídeo para download")
-                return None
-        else:
-            video_link = audio_link
+    except Exception as e:
+        logger.exception(f"Erro ao obter link do vídeo do Vimeo: {str(e)}")
+        return None
 
-        response = requests.get(video_link, stream=True)
-        response.raise_for_status()
+# def download_audio_from_vimeo(video_url, vimeo_client):
+#     try:
+#         video_id = extrair_video_id(video_url)
+#         if not video_id:
+#             return None
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
-            for chunk in response.iter_content(chunk_size=8192):
-                temp_file.write(chunk)
-            temp_file_path = temp_file.name
+#         video_info = vimeo_client.get(f'/videos/{video_id}').json()
+#         if not video_info:
+#             return None
 
-        if not audio_link:
-            video = VideoFileClip(temp_file_path)
-            audio = video.audio
-            audio_path = temp_file_path.replace('.mp4', '.mp3')
-            audio.write_audiofile(audio_path)
-            video.close()
-            os.remove(temp_file_path)
-            return audio_path
-        else:
-            return temp_file_path
+#         download_links = video_info.get('download', [])
+#         if not download_links:
+#             logger.error("Nenhum link de download disponível")
+#             return None
+
+#         # Tenta encontrar a menor versão do vídeo disponível para download
+#         video_link = min(download_links, key=lambda x: x.get('size', float('inf'))).get('link')
+#         if not video_link:
+#             logger.error("Não foi possível encontrar um link de vídeo para download")
+#             return None
+
+#         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video_file:
+#             response = requests.get(video_link, stream=True)
+#             response.raise_for_status()
+#             for chunk in response.iter_content(chunk_size=8192):
+#                 temp_video_file.write(chunk)
+#             temp_video_path = temp_video_file.name
+
+#         # Extrair áudio do vídeo
+#         video = VideoFileClip(temp_video_path)
+#         audio_path = temp_video_path.replace('.mp4', '.mp3')
+#         video.audio.write_audiofile(audio_path)
+#         video.close()
+
+#         # Remover o arquivo de vídeo temporário
+#         os.remove(temp_video_path)
+
+#         return audio_path
 
     except Exception as e:
         logger.exception(f"Erro ao processar o vídeo do Vimeo: {str(e)}")

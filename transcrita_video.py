@@ -130,7 +130,39 @@ def transcreve_audio_chunk(chunk_path, prompt=""):
             prompt=prompt,
         )
         return transcricao
+    
+def transcribe_vimeo_video(video_link):
+    client = get_openai_client()
+    if not client:
+        return None
 
+    try:
+        # Baixar o vídeo em um arquivo temporário
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
+            response = requests.get(video_link, stream=True)
+            response.raise_for_status()
+            for chunk in response.iter_content(chunk_size=8192):
+                temp_file.write(chunk)
+            temp_file_path = temp_file.name
+
+        # Transcrever o vídeo
+        with open(temp_file_path, 'rb') as video_file:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=video_file,
+                response_format="srt",
+                language="pt"
+            )
+
+        # Remover o arquivo temporário
+        os.remove(temp_file_path)
+
+        return transcription
+    except Exception as e:
+        logger.exception(f"Erro ao transcrever vídeo do Vimeo: {str(e)}")
+        st.error(f"Erro ao transcrever vídeo: {str(e)}")
+        return None
+    
 @st.cache_data
 def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
     client = get_openai_client()
@@ -207,34 +239,26 @@ def process_video(video_path):
                 logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {audio_path}")
 
 def process_vimeo_video(vimeo_url, model, max_tokens, temperature):
-    audio_path = None
     try:
-        with st.spinner("Baixando e extraindo áudio do vídeo do Vimeo..."):
-            audio_path = download_audio_from_vimeo(vimeo_url, vimeo_client)
-        
-        if audio_path is None:
-            st.error("Não foi possível baixar o áudio do vídeo do Vimeo.")
-            return
+        with st.spinner("Obtendo informações do vídeo do Vimeo..."):
+            video_link = get_vimeo_video_link(vimeo_url, vimeo_client)
+            if not video_link:
+                st.error("Não foi possível obter o link do vídeo do Vimeo.")
+                return
 
-        with st.spinner("Transcrevendo áudio..."):
-            srt_content = process_video(audio_path)
+        with st.spinner("Transcrevendo vídeo..."):
+            srt_content = transcribe_vimeo_video(video_link)
+            if not srt_content:
+                st.error("Não foi possível gerar a transcrição do vídeo do Vimeo.")
+                return
 
-        if srt_content:
-            st.success("Transcrição automática concluída!")
-            process_transcription(srt_content, model, max_tokens, temperature, vimeo_url)
-        else:
-            st.error("Não foi possível gerar a transcrição do áudio do Vimeo.")
+        st.success("Transcrição automática concluída!")
+        process_transcription(srt_content, model, max_tokens, temperature, vimeo_url)
 
     except Exception as e:
         logger.exception(f"Ocorreu um erro ao processar o vídeo do Vimeo: {str(e)}")
         st.error(f"Ocorreu um erro ao processar o vídeo do Vimeo: {str(e)}")
-    finally:
-        if audio_path and os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-            except Exception as e:
-                logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {str(e)}")
-
+        
 def page(model, max_tokens, temperature):
     st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
 
@@ -252,10 +276,13 @@ def page(model, max_tokens, temperature):
             if video_data:
                 st.write(f"**{video_data['name']}**")
                 st.markdown(video_data['embed']['html'], unsafe_allow_html=True)
-                if st.button("Transcrever vídeo do Vimeo automaticamente"):
+                if st.button("Transcrever vídeo do Vimeo"):
                     process_vimeo_video(vimeo_url, model, max_tokens, temperature)
             else:
                 st.error("Não foi possível obter informações do vídeo do Vimeo.")
+        else:
+            st.error("URL do Vimeo inválida.")
+
     elif uploaded_video:
         file_size = uploaded_video.size
         st.write(f"Tamanho do arquivo: {file_size / (1024 * 1024):.2f} MB")
