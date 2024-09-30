@@ -15,8 +15,16 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+import googleapiclient.errors
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+import pickle
+from google_auth_oauthlib.flow import Flow
+import webbrowser
 
-#CONFIGURAÇÕES GERAIS DE PASTAS
+# CONFIGURAÇÕES GERAIS DE PASTAS
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -96,47 +104,88 @@ def get_vimeo_video_link(video_url, vimeo_client):
         logger.exception(f"Erro ao obter link do vídeo do Vimeo: {str(e)}")
         return None
 
-# def download_audio_from_vimeo(video_url, vimeo_client):
-#     try:
-#         video_id = extrair_video_id(video_url)
-#         if not video_id:
-#             return None
+def get_authenticated_service():
+    scopes = ["https://www.googleapis.com/auth/youtube.force-ssl"]
+    credentials = None
 
-#         video_info = vimeo_client.get(f'/videos/{video_id}').json()
-#         if not video_info:
-#             return None
+    # Tenta carregar as credenciais do arquivo token.pickle
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            credentials = pickle.load(token)
 
-#         download_links = video_info.get('download', [])
-#         if not download_links:
-#             logger.error("Nenhum link de download disponível")
-#             return None
+    # Se não há credenciais válidas disponíveis, faça o login
+    if not credentials or not credentials.valid:
+        if credentials and credentials.expired and credentials.refresh_token:
+            credentials.refresh(Request())
+        else:
+            client_config = {
+                "installed": {
+                    "client_id": os.getenv("YOUTUBE_CLIENT_ID"),
+                    "client_secret": os.getenv("YOUTUBE_CLIENT_SECRET"),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "redirect_uris": ["http://localhost:8501/"]
+                }
+            }
 
-#         # Tenta encontrar a menor versão do vídeo disponível para download
-#         video_link = min(download_links, key=lambda x: x.get('size', float('inf'))).get('link')
-#         if not video_link:
-#             logger.error("Não foi possível encontrar um link de vídeo para download")
-#             return None
+            flow = Flow.from_client_config(
+                client_config,
+                scopes=scopes,
+                redirect_uri="http://localhost:8501/"
+            )
 
-#         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video_file:
-#             response = requests.get(video_link, stream=True)
-#             response.raise_for_status()
-#             for chunk in response.iter_content(chunk_size=8192):
-#                 temp_video_file.write(chunk)
-#             temp_video_path = temp_video_file.name
+            auth_url, _ = flow.authorization_url(prompt='consent')
+            
+            print(f"Por favor, acesse esta URL para autorizar o aplicativo: {auth_url}")
+            webbrowser.open(auth_url)  # Abre o navegador automaticamente
+            
+            # Aguarda o usuário inserir o código de autorização
+            auth_code = input("Cole o código de autorização aqui: ")
+            
+            flow.fetch_token(code=auth_code)
+            credentials = flow.credentials
 
-#         # Extrair áudio do vídeo
-#         video = VideoFileClip(temp_video_path)
-#         audio_path = temp_video_path.replace('.mp4', '.mp3')
-#         video.audio.write_audiofile(audio_path)
-#         video.close()
+        # Salva as credenciais para a próxima execução
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(credentials, token)
 
-#         # Remover o arquivo de vídeo temporário
-#         os.remove(temp_video_path)
+    return build("youtube", "v3", credentials=credentials)
 
-#         return audio_path
+def get_video_details(youtube, video_id):
+    try:
+        request = youtube.videos().list(
+            part="snippet,contentDetails",
+            id=video_id
+        )
+        response = request.execute()
 
+        if 'items' in response:
+            return response['items'][0]
+        else:
+            return None
     except Exception as e:
-        logger.exception(f"Erro ao processar o vídeo do Vimeo: {str(e)}")
+        logger.error(f"Erro ao obter detalhes do vídeo do YouTube: {str(e)}")
+        return None
+
+def get_video_download_url(youtube, video_id):
+    try:
+        request = youtube.videos().list(
+            part="player",
+            id=video_id
+        )
+        response = request.execute()
+
+        if 'items' in response and response['items']:
+            embed_html = response['items'][0]['player']['embedHtml']
+            # Extrair a URL do vídeo do HTML de incorporação
+            # Nota: Este é um método simplificado e pode precisar de ajustes
+            video_url = embed_html.split('src="')[1].split('"')[0]
+            return video_url
+        else:
+            return None
+    except Exception as e:
+        logger.error(f"Erro ao obter URL de download do vídeo do YouTube: {str(e)}")
         return None
     
 ########################################
