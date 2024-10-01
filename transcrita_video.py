@@ -7,6 +7,7 @@ import re
 import logging
 from utils import *
 import pages.youtube_terms_service as youtube_terms_service
+from google.cloud import storage
 
 # Load environment variables
 _ = load_dotenv(find_dotenv())
@@ -28,6 +29,19 @@ vimeo_client = vimeo.VimeoClient(
 )
 
 st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
+
+# Configurações do Google Cloud Storage
+try:
+    _, project = google.auth.default()
+    GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
+    if not GCS_BUCKET_NAME:
+        raise ValueError("GCS_BUCKET_NAME não está configurado nas variáveis de ambiente")
+    storage_client = storage.Client(project=project)
+    bucket = storage_client.bucket(GCS_BUCKET_NAME)
+except Exception as e:
+    logger.error(f"Erro ao configurar Google Cloud Storage: {str(e)}")
+    #st.error("Erro ao configurar Google Cloud Storage. Verifique suas credenciais e configurações.")
+    GCS_BUCKET_NAME = None  # Define como None se houver erro
 
 def get_openai_client():
     if "openai_client" not in st.session_state:
@@ -216,28 +230,57 @@ def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
         st.error(f"Erro ao gerar resumo: {str(e)}")
         return None
 
-def process_video(video_path):
+def process_video(video_url):
+    temp_audio_file = None
     try:
-        audio_path = video_path.replace(".mp4", ".mp3")
-        with VideoFileClip(video_path) as video:
+        # Criar um arquivo temporário para o áudio
+        temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+        temp_audio_file.close()
+        audio_path = temp_audio_file.name
+        
+        logger.info(f"Iniciando processamento do vídeo: {video_url}")
+        logger.info(f"Arquivo de áudio temporário criado: {audio_path}")
+        
+        # Extrair áudio diretamente da URL do vídeo
+        with VideoFileClip(video_url) as video:
             video.audio.write_audiofile(audio_path)
         
+        logger.info(f"Áudio extraído e salvo em: {audio_path}")
+        
+        # Verificar se o arquivo de áudio foi criado corretamente
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"O arquivo de áudio não foi criado: {audio_path}")
+        
+        # Dividir o áudio em chunks
         audio_chunks = split_audio(audio_path)
         full_transcript = ""
         
-        for chunk_path, start_time in audio_chunks:
+        logger.info(f"Iniciando transcrição de {len(audio_chunks)} chunks de áudio")
+        
+        # Processar cada chunk de áudio
+        for i, (chunk_path, start_time) in enumerate(audio_chunks):
+            logger.info(f"Processando chunk {i+1}/{len(audio_chunks)}")
             chunk_transcript = transcreve_audio_chunk(chunk_path)
             adjusted_transcript = ajusta_tempo_srt(chunk_transcript, start_time)
             full_transcript += adjusted_transcript + "\n\n"
             os.remove(chunk_path)  # Remove o chunk de áudio após a transcrição
         
+        logger.info("Transcrição completa")
         return full_transcript
+    
+    except Exception as e:
+        logger.exception(f"Erro ao processar o vídeo: {str(e)}")
+        raise
+    
     finally:
-        if os.path.exists(audio_path):
+        logger.info("Iniciando limpeza de recursos")
+        # Limpeza dos arquivos temporários
+        if temp_audio_file and os.path.exists(temp_audio_file.name):
             try:
-                os.remove(audio_path)
-            except PermissionError:
-                logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {audio_path}")
+                os.remove(temp_audio_file.name)
+                logger.info(f"Arquivo de áudio temporário removido: {temp_audio_file.name}")
+            except Exception as e:
+                logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {str(e)}")
 
 def process_vimeo_video(vimeo_url, model, max_tokens, temperature):
     try:
@@ -332,17 +375,17 @@ def process_transcription(srt_content, model, max_tokens, temperature, video_pat
 
     st.success("Processamento concluído!")
 
-    tab1, tab2, tab3 = st.tabs(["Vídeo Original", "Resumo das Pautas Importantes", "Transcrição Completa"])
+    tab2, tab3 = st.tabs(["Resumo das Pautas Importantes", "Transcrição Completa"])
     
-    with tab1:
-        if video_path.startswith('http'):  # É uma URL do Vimeo ou YouTube
-            if 'vimeo.com' in video_path:
-                video_id = extrair_video_id(video_path)
-                st.markdown(f'<iframe src="https://player.vimeo.com/video/{video_id}" width="640" height="360" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>', unsafe_allow_html=True)
-            elif 'youtube.com' in video_path or 'youtu.be' in video_path:
-                st.video(video_path)
-        else:  # É um arquivo local
-            st.video(video_path)
+    # with tab1:
+    #     if video_path.startswith('http'):  # É uma URL do Vimeo ou YouTube
+    #         if 'vimeo.com' in video_path:
+    #             video_id = extrair_video_id(video_path)
+    #             st.markdown(f'<iframe src="https://player.vimeo.com/video/{video_id}" width="640" height="360" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>', unsafe_allow_html=True)
+    #         elif 'youtube.com' in video_path or 'youtu.be' in video_path:
+    #             st.video(video_path)
+    #     else:  # É um arquivo local
+    #         st.video(video_path)
 
     with tab2:
         resumo_formatado = formata_resumo_com_links(resumo_srt, video_path)
@@ -389,107 +432,136 @@ def process_transcription(srt_content, model, max_tokens, temperature, video_pat
             logger.warning(f"Não foi possível remover o arquivo temporário {file}: {str(e)}")
 
 def page(model, max_tokens, temperature):
-    st.title("Resumo de Transcrição de Vídeo (Estilo tl;dv)")
+    st.title("Resumo de Transcrição de Vídeo. ")
 
     if 'session_id' not in st.session_state:
         st.session_state.session_id = hashlib.md5(str(datetime.datetime.now()).encode()).hexdigest()
 
-    video_source = st.radio("Escolha a fonte do vídeo:", ["Upload", "Vimeo", "YouTube"])
+    video_source = st.radio("Escolha a fonte do vídeo:", ["Upload Local", "Google Cloud Storage"])
 
-    if video_source == "Upload":
+    if video_source == "Upload Local":
         uploaded_video = st.file_uploader("Faça upload do vídeo", type=['mp4', 'avi', 'mov'])
         if uploaded_video:
             file_size = uploaded_video.size
             st.write(f"Tamanho do arquivo: {file_size / (1024 * 1024):.2f} MB")
 
-            chunk_size = 200 * 1024 * 1024  # 200MB chunks
-            total_chunks = -(-file_size // chunk_size)  # Ceil division
-
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-
-            final_video_path = None
-            for i in range(total_chunks):
-                status_text.text(f"Fazendo upload do chunk {i+1}/{total_chunks}")
-                start = i * chunk_size
-                end = min((i + 1) * chunk_size, file_size)
-                chunk = uploaded_video.read(end - start)
-                result = process_video_chunk(chunk, i, total_chunks, st.session_state.session_id)
-                if result:
-                    final_video_path = result
-                progress_bar.progress((i + 1) / total_chunks)
-
-            if final_video_path:
-                status_text.text("Processando o vídeo...")
+            if file_size <= 200 * 1024 * 1024:  # 200MB em bytes
+                # Processamento direto para arquivos menores que 200MB
                 try:
-                    srt_content = None
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
+                        temp_file.write(uploaded_video.read())
+                        temp_file_path = temp_file.name
+
+                    if st.button("Transcrever vídeo automaticamente"):
+                        st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
+                        try:
+                            srt_content = process_video(temp_file_path)
+                            if srt_content:
+                                st.success("Transcrição automática concluída!")
+                                process_transcription(srt_content, model, max_tokens, temperature, temp_file_path)
+                            else:
+                                st.error("Não foi possível realizar a transcrição automática. Por favor, verifique as dependências do projeto.")
+                        except Exception as e:
+                            st.error(f"Erro durante a transcrição: {str(e)}")
+                            logger.exception("Erro durante a transcrição do vídeo")
+                finally:
+                    if os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
+            else:
+                # Para arquivos maiores que 200MB, use o GCS
+                if GCS_BUCKET_NAME is None:
+                    st.error("Google Cloud Storage não está configurado corretamente. Não é possível processar arquivos maiores que 200MB.")
+                    return
+
+                chunk_size = 200 * 1024 * 1024  # 200MB chunks
+                total_chunks = -(-file_size // chunk_size)  # Ceil division
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                final_video_path = None
+                for i in range(total_chunks):
+                    status_text.text(f"Fazendo upload do chunk {i+1}/{total_chunks}")
+                    start = i * chunk_size
+                    end = min((i + 1) * chunk_size, file_size)
+                    chunk = uploaded_video.read(end - start)
+                    result = process_video_chunk(chunk, i, total_chunks, st.session_state.session_id, GCS_BUCKET_NAME)
+                    if result:
+                        final_video_path = result
+                    progress_bar.progress((i + 1) / total_chunks)
+
+                if final_video_path:
+                    status_text.text("Processando o vídeo...")
                     if st.button("Transcrever vídeo automaticamente"):
                         st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
                         try:
                             srt_content = process_video(final_video_path)
                             if srt_content:
                                 st.success("Transcrição automática concluída!")
+                                process_transcription(srt_content, model, max_tokens, temperature, final_video_path)
                             else:
                                 st.error("Não foi possível realizar a transcrição automática. Por favor, verifique as dependências do projeto.")
                         except Exception as e:
                             st.error(f"Erro durante a transcrição: {str(e)}")
                             logger.exception("Erro durante a transcrição do vídeo")
-                    else:
-                        st.warning("Nenhuma transcrição fornecida. Clique no botão acima para transcrever automaticamente.")
 
+    elif video_source == "Google Cloud Storage":
+        gcs_video_url = st.text_input("Digite a URL pública do vídeo no Google Cloud Storage")
+        if gcs_video_url:
+            st.write(f"URL do vídeo: {gcs_video_url}")
+            
+            if st.button("Transcrever vídeo automaticamente"):
+                st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
+                try:
+                    with st.spinner("Realizando transcrição..."):
+                        srt_content = process_video(gcs_video_url)
+                    
                     if srt_content:
-                        process_transcription(srt_content, model, max_tokens, temperature, final_video_path)
-
+                        st.success("Transcrição automática concluída!")
+                        process_transcription(srt_content, model, max_tokens, temperature, gcs_video_url)
+                    else:
+                        st.error("Não foi possível realizar a transcrição automática.")
                 except Exception as e:
-                    st.error(f"Ocorreu um erro durante o processamento: {str(e)}")
-                    logger.exception("Erro durante o processamento do vídeo")
-                
-                finally:
-                    # Limpar os arquivos temporários
-                    try:
-                        for item in os.listdir(PASTA_TEMP / st.session_state.session_id):
-                            if item != "final_video.mp4":
-                                os.remove(PASTA_TEMP / st.session_state.session_id / item)
-                    except Exception as e:
-                        logger.warning(f"Não foi possível remover todos os arquivos temporários: {str(e)}")
+                    st.error(f"Erro durante a transcrição: {str(e)}")
+                    logger.exception("Erro durante a transcrição do vídeo")
 
-    elif video_source == "Vimeo":
-        vimeo_url = st.text_input("URL do vídeo do Vimeo")
-        if vimeo_url:
-            video_id = extrair_video_id(vimeo_url)
-            if video_id:
-                video_data = vimeo_client.get(f'/videos/{video_id}').json()
-                if video_data:
-                    st.write(f"**{video_data['name']}**")
-                    st.markdown(video_data['embed']['html'], unsafe_allow_html=True)
-                    if st.button("Transcrever vídeo do Vimeo"):
-                        process_vimeo_video(vimeo_url, model, max_tokens, temperature)
-                else:
-                    st.error("Não foi possível obter informações do vídeo do Vimeo.")
-            else:
-                st.error("URL do Vimeo inválida.")
+    # elif video_source == "Vimeo":
+    #     vimeo_url = st.text_input("URL do vídeo do Vimeo")
+    #     if vimeo_url:
+    #         video_id = extrair_video_id(vimeo_url)
+    #         if video_id:
+    #             video_data = vimeo_client.get(f'/videos/{video_id}').json()
+    #             if video_data:
+    #                 st.write(f"**{video_data['name']}**")
+    #                 st.markdown(video_data['embed']['html'], unsafe_allow_html=True)
+    #                 if st.button("Transcrever vídeo do Vimeo"):
+    #                     process_vimeo_video(vimeo_url, model, max_tokens, temperature)
+    #             else:
+    #                 st.error("Não foi possível obter informações do vídeo do Vimeo.")
+    #         else:
+    #             st.error("URL do Vimeo inválida.")
 
-    elif video_source == "YouTube":
-        if 'youtube_terms_accepted' not in st.session_state:
-            st.session_state.youtube_terms_accepted = False
+    # elif video_source == "YouTube":
+    #     if 'youtube_terms_accepted' not in st.session_state:
+    #         st.session_state.youtube_terms_accepted = False
 
-        if not st.session_state.youtube_terms_accepted:
-            st.warning("Antes de usar a funcionalidade do YouTube, você precisa aceitar os Termos de Serviço.")
-            if st.button("Ver e Aceitar Termos de Serviço do YouTube"):
-                st.switch_page("pages/youtube_terms_service.py")
+    #     if not st.session_state.youtube_terms_accepted:
+    #         st.warning("Antes de usar a funcionalidade do YouTube, você precisa aceitar os Termos de Serviço.")
+    #         if st.button("Ver e Aceitar Termos de Serviço do YouTube"):
+    #             st.switch_page("pages/youtube_terms_service.py")
         
-        if st.session_state.get('youtube_terms_accepted', False):
-            youtube_url = st.text_input("URL do vídeo do YouTube")
-            if youtube_url:
-                video_id = extract_youtube_video_id(youtube_url)
-                if video_id:
-                    st.video(f"https://www.youtube.com/watch?v={video_id}")
-                    if st.button("Transcrever vídeo do YouTube"):
-                        process_youtube_video(video_id, model, max_tokens, temperature)
-                else:
-                    st.error("URL do YouTube inválida.")
-        else:
-            st.warning("Você precisa aceitar os Termos de Serviço para usar a funcionalidade do YouTube.")
+    #     if st.session_state.get('youtube_terms_accepted', False):
+    #         youtube_url = st.text_input("URL do vídeo do YouTube")
+    #         if youtube_url:
+    #             video_id = extract_youtube_video_id(youtube_url)
+    #             if video_id:
+    #                 st.video(f"https://www.youtube.com/watch?v={video_id}")
+    #                 if st.button("Transcrever vídeo do YouTube"):
+    #                     process_youtube_video(video_id, model, max_tokens, temperature)
+    #             else:
+    #                 st.error("URL do YouTube inválida.")
+    #     else:
+    #         st.warning("Você precisa aceitar os Termos de Serviço para usar a funcionalidade do YouTube.")
             
     # uploaded_transcript = st.file_uploader("Faça upload da transcrição (opcional, .txt)", type=['txt'])
     # if uploaded_transcript:
@@ -512,15 +584,15 @@ def page(model, max_tokens, temperature):
     </script>
     """, unsafe_allow_html=True)
 
-def show_youtube_terms():
-    youtube_terms_service.main()
+# def show_youtube_terms():
+#     youtube_terms_service.main()
     
-    # Verificar se o checkbox foi marcado
-    if st.session_state.get('youtube_terms_checkbox', False):
-        st.session_state.youtube_terms_accepted = True
-        st.success("Termos aceitos. Você pode agora usar a funcionalidade do YouTube.")
-    else:
-        st.session_state.youtube_terms_accepted = False
+#     # Verificar se o checkbox foi marcado
+#     if st.session_state.get('youtube_terms_checkbox', False):
+#         st.session_state.youtube_terms_accepted = True
+#         st.success("Termos aceitos. Você pode agora usar a funcionalidade do YouTube.")
+#     else:
+#         st.session_state.youtube_terms_accepted = False
         
 def main():
     if check_password():
@@ -531,8 +603,8 @@ def main():
         st.session_state.sidebar_config = (model, max_tokens, temperature)
 
         # Adicionar link para Termos de Serviço na sidebar
-        if st.sidebar.button("Termos de Serviço do YouTube"):
-            st.switch_page("pages/youtube_terms_service.py")
+        # if st.sidebar.button("Termos de Serviço do YouTube"):
+        #     st.switch_page("pages/youtube_terms_service.py")
 
         # Chamar a página principal com as configurações atualizadas
         page(model, max_tokens, temperature)

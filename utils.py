@@ -23,6 +23,7 @@ from googleapiclient.discovery import build
 import pickle
 from google_auth_oauthlib.flow import Flow
 import webbrowser
+from google.cloud import storage
 
 # CONFIGURAÇÕES GERAIS DE PASTAS
 # Configurar logging
@@ -53,8 +54,19 @@ def split_audio(audio_path, chunk_duration=300):  # 5 minutos por chunk
     
     audio.close()
     return chunks
+    
+def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
+    """Uploads a file to the bucket."""
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
 
-def process_video_chunk(chunk, chunk_number, total_chunks, session_id):
+    blob.upload_from_filename(source_file_name)
+
+    print(f"File {source_file_name} uploaded to {destination_blob_name}.")
+    return f"gs://{bucket_name}/{destination_blob_name}"
+
+def process_video_chunk(chunk, chunk_number, total_chunks, session_id, bucket_name):
     chunk_dir = PASTA_TEMP / session_id
     chunk_dir.mkdir(exist_ok=True)
     chunk_file = chunk_dir / f"chunk_{chunk_number}.mp4"
@@ -62,14 +74,24 @@ def process_video_chunk(chunk, chunk_number, total_chunks, session_id):
     with open(chunk_file, "wb") as f:
         f.write(chunk)
     
+    # Upload do chunk para o GCS
+    destination_blob_name = f"{session_id}/chunk_{chunk_number}.mp4"
+    gcs_path = upload_to_gcs(bucket_name, str(chunk_file), destination_blob_name)
+    
     if chunk_number == total_chunks - 1:
-        final_video = chunk_dir / "final_video.mp4"
-        with open(final_video, "wb") as outfile:
-            for i in range(total_chunks):
-                chunk_file = chunk_dir / f"chunk_{i}.mp4"
-                outfile.write(chunk_file.read_bytes())
-                chunk_file.unlink()
-        return str(final_video)
+        # Todos os chunks foram enviados, agora podemos combinar no GCS
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        
+        # Combinar todos os chunks em um único arquivo
+        combined_blob = bucket.blob(f"{session_id}/final_video.mp4")
+        combined_blob.compose([bucket.blob(f"{session_id}/chunk_{i}.mp4") for i in range(total_chunks)])
+        
+        # Deletar os chunks individuais
+        for i in range(total_chunks):
+            bucket.blob(f"{session_id}/chunk_{i}.mp4").delete()
+        
+        return f"gs://{bucket_name}/{session_id}/final_video.mp4"
     return None
 
 def extrair_video_id(url):
