@@ -8,6 +8,9 @@ import logging
 from utils import *
 import pages.youtube_terms_service as youtube_terms_service
 from google.cloud import storage
+import math
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.enums import TA_JUSTIFY
 
 # Load environment variables
 _ = load_dotenv(find_dotenv())
@@ -93,7 +96,7 @@ def check_password():
 # Função para configurar o slidebar
 def sidebar():
     with st.sidebar:
-        st.image("images/logo_google.jpg", width=200)
+        st.image("images/escola_nomade.jpg", width=200)
         st.title("Assistente de Transcrição de Vídeo")
         st.header("SEJA BEM VINDO!")
         st.write(f"Olá, {st.session_state.get('username', 'Usuário')}!")
@@ -145,7 +148,102 @@ def transcreve_audio_chunk(chunk_path, prompt=""):
             prompt=prompt,
         )
         return transcricao
+
     
+@st.cache_data
+def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
+    client = get_openai_client()
+    if not client:
+        return None
+
+    try:
+        # Dividir a transcrição em partes menores se necessário
+        max_chars = 15000  # Ajuste este valor conforme necessário
+        transcricao_parts = [transcricao[i:i+max_chars] for i in range(0, len(transcricao), max_chars)]
+        
+        resumo_completo = ""
+        for part in transcricao_parts:
+            resposta = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Você é um assistente especializado em criar resumos concisos e informativos."},
+                    {"role": "user", "content": f"""Crie um resumo desta parte da transcrição, seguindo estas diretrizes:
+                    1. Identifique os pontos principais do conteúdo sem repetições.
+                    2. Escreva uma breve descrição para cada ponto importante.
+                    3. Mantenha cada ponto conciso, mas informativo.
+                    4. Cubra todo o conteúdo desta parte, não apenas o início.
+                    5. Apresente os pontos em ordem cronológica.
+                    6. Não inclua timestamps no resumo.
+
+                    Transcrição:
+                    {part}"""}
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+            resumo_completo += resposta.choices[0].message.content + "\n\n"
+        
+        return resumo_completo.strip()
+    except Exception as e:
+        st.error(f"Erro ao gerar resumo: {str(e)}")
+        return None
+
+def process_video(video_url):
+    temp_audio_file = None
+    try:
+        # Criar um arquivo temporário para o áudio
+        temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+        temp_audio_file.close()
+        audio_path = temp_audio_file.name
+        
+        logger.info(f"Iniciando processamento do vídeo: {video_url}")
+        logger.info(f"Arquivo de áudio temporário criado: {audio_path}")
+        
+        # Extrair áudio diretamente da URL do vídeo
+        with VideoFileClip(video_url) as video:
+            audio = video.audio
+            audio.write_audiofile(audio_path)
+        
+        logger.info(f"Áudio extraído e salvo em: {audio_path}")
+        
+        # Verificar se o arquivo de áudio foi criado corretamente
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"O arquivo de áudio não foi criado: {audio_path}")
+        
+        # Dividir o áudio em chunks
+        audio_chunks = split_audio(audio_path, chunk_duration=600)  # 10 minutos por chunk
+        full_transcript = ""
+        
+        logger.info(f"Iniciando transcrição de {len(audio_chunks)} chunks de áudio")
+        
+        # Processar cada chunk de áudio
+        for i, (chunk_path, start_time) in enumerate(audio_chunks):
+            logger.info(f"Processando chunk {i+1}/{len(audio_chunks)}")
+            chunk_transcript = transcreve_audio_chunk(chunk_path)
+            adjusted_transcript = ajusta_tempo_srt(chunk_transcript, start_time)
+            full_transcript += adjusted_transcript + "\n\n"
+            os.remove(chunk_path)  # Remove o chunk de áudio após a transcrição
+        
+        logger.info("Transcrição completa")
+        return full_transcript
+    
+    except Exception as e:
+        logger.exception(f"Erro ao processar o vídeo: {str(e)}")
+        raise
+    
+    finally:
+        logger.info("Iniciando limpeza de recursos")
+        # Limpeza dos arquivos temporários
+        if temp_audio_file and os.path.exists(temp_audio_file.name):
+            try:
+                os.remove(temp_audio_file.name)
+                logger.info(f"Arquivo de áudio temporário removido: {temp_audio_file.name}")
+            except Exception as e:
+                logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {str(e)}")
+
+########################################
+#FUNÇÕES DE TRANSCRIÇÃO DE VIDEO DO VIMEO
+########################################
 def transcribe_vimeo_video(video_link):
     client = get_openai_client()
     if not client:
@@ -177,110 +275,6 @@ def transcribe_vimeo_video(video_link):
         logger.exception(f"Erro ao transcrever vídeo do Vimeo: {str(e)}")
         st.error(f"Erro ao transcrever vídeo: {str(e)}")
         return None
-    
-@st.cache_data
-def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
-    client = get_openai_client()
-    if not client:
-        return None
-
-    try:
-        resposta = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Você é um assistente especializado em criar resumos concisos e informativos no estilo do aplicativo tl;dv."},
-                {"role": "user", "content": f"""Crie um resumo desta transcrição no estilo tl;dv, seguindo estas diretrizes:
-                1. Identifique 20-30 pontos principais do conteúdo.
-                2. Para cada ponto, forneça um timestamp aproximado no formato [MM:SS].
-                3. Escreva uma breve descrição para cada ponto, começando com o timestamp.
-                4. Não sobreponha nos timestamps de cada resumo.
-                5. Mantenha cada ponto conciso, mas informativo.
-                6. Cubra todo o conteúdo inteiro do vídeo, não apenas o início.
-                7. Apresente os pontos em ordem cronológica.
-
-                Exemplo do formato desejado:
-                [00:00] - Introdução: Breve descrição do tópico introdutório.
-                [05:30] - Ponto principal 2: Descrição do segundo ponto importante.
-                [10:15] - Discussão sobre X: Breve resumo da discussão sobre X.
-
-                Transcrição:
-                {transcricao}"""}
-            ],
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
-        resumo_bruto = resposta.choices[0].message.content
-        # Processar o resumo bruto para o formato SRT
-        pontos = re.findall(r'\[(\d{2}:\d{2})\] - (.*)', resumo_bruto)
-        resumo_formatado = []
-        for i, (timestamp, conteudo) in enumerate(pontos, start=1):
-            minutos, segundos = map(int, timestamp.split(':'))
-            tempo_inicio = f"00:{minutos:02d}:{segundos:02d},000"
-            tempo_fim = f"00:{minutos:02d}:{segundos+59 if segundos < 1 else 59:02d},000"
-            
-            resumo_formatado.extend([
-                str(i),
-                f"{tempo_inicio} --> {tempo_fim}",
-                f"[{timestamp}] - {conteudo}",
-                ""
-            ])
-        
-        return "\n".join(resumo_formatado).strip()
-    except Exception as e:
-        st.error(f"Erro ao gerar resumo: {str(e)}")
-        return None
-
-def process_video(video_url):
-    temp_audio_file = None
-    try:
-        # Criar um arquivo temporário para o áudio
-        temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-        temp_audio_file.close()
-        audio_path = temp_audio_file.name
-        
-        logger.info(f"Iniciando processamento do vídeo: {video_url}")
-        logger.info(f"Arquivo de áudio temporário criado: {audio_path}")
-        
-        # Extrair áudio diretamente da URL do vídeo
-        with VideoFileClip(video_url) as video:
-            video.audio.write_audiofile(audio_path)
-        
-        logger.info(f"Áudio extraído e salvo em: {audio_path}")
-        
-        # Verificar se o arquivo de áudio foi criado corretamente
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError(f"O arquivo de áudio não foi criado: {audio_path}")
-        
-        # Dividir o áudio em chunks
-        audio_chunks = split_audio(audio_path)
-        full_transcript = ""
-        
-        logger.info(f"Iniciando transcrição de {len(audio_chunks)} chunks de áudio")
-        
-        # Processar cada chunk de áudio
-        for i, (chunk_path, start_time) in enumerate(audio_chunks):
-            logger.info(f"Processando chunk {i+1}/{len(audio_chunks)}")
-            chunk_transcript = transcreve_audio_chunk(chunk_path)
-            adjusted_transcript = ajusta_tempo_srt(chunk_transcript, start_time)
-            full_transcript += adjusted_transcript + "\n\n"
-            os.remove(chunk_path)  # Remove o chunk de áudio após a transcrição
-        
-        logger.info("Transcrição completa")
-        return full_transcript
-    
-    except Exception as e:
-        logger.exception(f"Erro ao processar o vídeo: {str(e)}")
-        raise
-    
-    finally:
-        logger.info("Iniciando limpeza de recursos")
-        # Limpeza dos arquivos temporários
-        if temp_audio_file and os.path.exists(temp_audio_file.name):
-            try:
-                os.remove(temp_audio_file.name)
-                logger.info(f"Arquivo de áudio temporário removido: {temp_audio_file.name}")
-            except Exception as e:
-                logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {str(e)}")
 
 def process_vimeo_video(vimeo_url, model, max_tokens, temperature):
     try:
@@ -303,6 +297,9 @@ def process_vimeo_video(vimeo_url, model, max_tokens, temperature):
         logger.exception(f"Ocorreu um erro ao processar o vídeo do Vimeo: {str(e)}")
         st.error(f"Ocorreu um erro ao processar o vídeo do Vimeo: {str(e)}")
 
+########################################
+#FUNÇÕES DE TRANSCRIÇÃO DE VIDEO DO YOUTUBE
+########################################
 def extract_youtube_video_id(url):
     # Função para extrair o ID do vídeo do YouTube da URL
     pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?(.+)'
@@ -370,39 +367,30 @@ def transcribe_youtube_video(video_url):
         return None
     
 def process_transcription(srt_content, model, max_tokens, temperature, video_path):
-    resumo_srt = gera_resumo_tldv(srt_content, model, max_tokens, temperature)
+    resumo = gera_resumo_tldv(srt_content, model, max_tokens, temperature)
     transcript_srt = srt_content
 
     st.success("Processamento concluído!")
 
     tab2, tab3 = st.tabs(["Resumo das Pautas Importantes", "Transcrição Completa"])
-    
-    # with tab1:
-    #     if video_path.startswith('http'):  # É uma URL do Vimeo ou YouTube
-    #         if 'vimeo.com' in video_path:
-    #             video_id = extrair_video_id(video_path)
-    #             st.markdown(f'<iframe src="https://player.vimeo.com/video/{video_id}" width="640" height="360" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>', unsafe_allow_html=True)
-    #         elif 'youtube.com' in video_path or 'youtu.be' in video_path:
-    #             st.video(video_path)
-    #     else:  # É um arquivo local
-    #         st.video(video_path)
 
     with tab2:
-        resumo_formatado = formata_resumo_com_links(resumo_srt, video_path)
-        st.markdown(resumo_formatado, unsafe_allow_html=True)
+        st.markdown(resumo)
 
     with tab3:
         st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
 
     # Criar PDFs e SRTs
-    resumo_pdf = create_pdf(processa_srt(resumo_srt), "resumo.pdf")
-    transcript_pdf = create_pdf(processa_srt(transcript_srt), "transcricao_completa.pdf")
+    resumo_pdf = create_pdf(resumo, "resumo.pdf")
+    transcript_pdf = create_pdf(processa_srt_sem_timestamp(transcript_srt), "transcricao_completa.pdf")
     
-    resumo_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
+    resumo_srt = gera_srt_do_resumo(resumo)
+    
+    resumo_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt', encoding='utf-8')
     resumo_srt_file.write(resumo_srt)
     resumo_srt_file.close()
     
-    transcript_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt')
+    transcript_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt', encoding='utf-8')
     transcript_srt_file.write(transcript_srt)
     transcript_srt_file.close()
 

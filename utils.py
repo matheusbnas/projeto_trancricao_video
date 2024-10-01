@@ -13,8 +13,9 @@ from pydub import AudioSegment
 import srt
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.enums import TA_JUSTIFY
 import googleapiclient.errors
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -23,7 +24,7 @@ from googleapiclient.discovery import build
 import pickle
 from google_auth_oauthlib.flow import Flow
 import webbrowser
-from google.cloud import storage
+import re
 
 # CONFIGURAÇÕES GERAIS DE PASTAS
 # Configurar logging
@@ -40,7 +41,7 @@ MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
 ########################################
 #FUNÇÃO DE PROCESSAMENTO DE AUDIO E VÍDEO
 ########################################
-def split_audio(audio_path, chunk_duration=300):  # 5 minutos por chunk
+def split_audio(audio_path, chunk_duration=600):  # 10 minutos por chunk
     audio = AudioFileClip(audio_path)
     duration = audio.duration
     chunks = []
@@ -257,19 +258,47 @@ def formata_resumo_com_links(resumo_srt, video_path):
         resumo_formatado += f"{link} - {sub.content}<br>"
     return resumo_formatado
 
+def processa_srt_sem_timestamp(srt_content):
+    subtitles = list(srt.parse(srt_content))
+    transcript_text = ""
+    for sub in subtitles:
+        transcript_text += f"{sub.content}\n"
+    return transcript_text
+
+def gera_srt_do_resumo(resumo):
+    linhas = resumo.split('\n')
+    subtitles = []
+    for i, linha in enumerate(linhas, start=1):
+        if linha.strip():
+            start_time = datetime.timedelta(seconds=(i-1)*5)
+            end_time = start_time + datetime.timedelta(seconds=5)
+            subtitle = srt.Subtitle(index=i, start=start_time, end=end_time, content=linha.strip())
+            subtitles.append(subtitle)
+    return srt.compose(subtitles)
+    
 ########################################
 #FUNÇÃO DE CRIAÇÃO E DOWNLOAD DE ARQUIVO PDF
 ########################################
 def create_pdf(content, filename):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
+    
     styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='Justify', alignment=TA_JUSTIFY))
     flowables = []
 
-    for line in content.split('\n'):
-        p = Paragraph(line, styles['Normal'])
-        flowables.append(p)
-        flowables.append(Spacer(1, 12))
+    # Dividir o conteúdo em parágrafos
+    paragraphs = content.split('\n\n')  # Assume que parágrafos são separados por linha em branco
+
+    for paragraph in paragraphs:
+        if paragraph.strip():
+            # Remove qualquer numeração ou formatação especial
+            clean_paragraph = re.sub(r'^\d+\.\s*', '', paragraph.strip())
+            clean_paragraph = re.sub(r'\*\*(.*?)\*\*', r'\1', clean_paragraph)  # Remove negrito (**)
+            
+            p = Paragraph(clean_paragraph, styles['Justify'])
+            flowables.append(p)
+            flowables.append(Spacer(1, 12))  # Espaçamento entre parágrafos
 
     doc.build(flowables)
     buffer.seek(0)
