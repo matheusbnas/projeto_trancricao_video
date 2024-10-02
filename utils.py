@@ -281,14 +281,32 @@ def processa_srt_sem_timestamp(srt_content):
         transcript_text += f"{sub.content}\n"
     return transcript_text
 
-def gera_srt_do_resumo(resumo):
+def gera_srt_do_resumo(resumo, duracao_total_segundos):
     linhas = resumo.split('\n')
     subtitles = []
+    tempo_por_linha = duracao_total_segundos / len(linhas)
+    
     for i, linha in enumerate(linhas, start=1):
         if linha.strip():
-            start_time = datetime.timedelta(seconds=(i-1)*5)
-            end_time = start_time + datetime.timedelta(seconds=5)
-            subtitle = srt.Subtitle(index=i, start=start_time, end=end_time, content=linha.strip())
+            start_time = datetime.timedelta(seconds=int((i-1) * tempo_por_linha))
+            end_time = datetime.timedelta(seconds=int(i * tempo_por_linha))
+            
+            # Extrair o timestamp do início da linha (se existir)
+            match = re.match(r'\[(\d{2}:\d{2})\] - (.+)', linha)
+            if match:
+                timestamp, content = match.groups()
+                minutos, segundos = map(int, timestamp.split(':'))
+                start_time = datetime.timedelta(minutes=minutos, seconds=segundos)
+                end_time = start_time + datetime.timedelta(seconds=int(tempo_por_linha))
+            else:
+                content = linha
+
+            subtitle = srt.Subtitle(
+                index=i,
+                start=start_time,
+                end=end_time,
+                content=linha.strip()
+            )
             subtitles.append(subtitle)
     return srt.compose(subtitles)
     

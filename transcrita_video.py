@@ -6,7 +6,6 @@ import vimeo
 import re
 import logging
 from utils import *
-import pages.youtube_terms_service as youtube_terms_service
 from google.cloud import storage
 import math
 from reportlab.lib.styles import ParagraphStyle
@@ -373,6 +372,10 @@ def process_transcription(srt_content, model, max_tokens, temperature, video_pat
     resumo = gera_resumo_tldv(srt_content, model, max_tokens, temperature)
     transcript_srt = srt_content
 
+    # Obter a duração total do vídeo
+    with VideoFileClip(video_path) as video:
+        duracao_total_segundos = int(video.duration)
+
     st.success("Processamento concluído!")
 
     tab2, tab3 = st.tabs(["Resumo das Pautas Importantes", "Transcrição Completa"])
@@ -387,7 +390,7 @@ def process_transcription(srt_content, model, max_tokens, temperature, video_pat
     resumo_pdf = create_pdf(resumo, "resumo.pdf")
     transcript_pdf = create_pdf(processa_srt_sem_timestamp(transcript_srt), "transcricao_completa.pdf")
     
-    resumo_srt = gera_srt_do_resumo(resumo)
+    resumo_srt = gera_srt_do_resumo(resumo, duracao_total_segundos)
     
     resumo_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt', encoding='utf-8')
     resumo_srt_file.write(resumo_srt)
