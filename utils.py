@@ -41,7 +41,7 @@ MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
 ########################################
 #FUNÇÃO DE PROCESSAMENTO DE AUDIO E VÍDEO
 ########################################
-def split_audio(audio_path, chunk_duration=600):  # 10 minutos por chunk
+def split_audio(audio_path, chunk_duration=1200):  # 20 minutos por chunk
     audio = AudioFileClip(audio_path)
     duration = audio.duration
     chunks = []
@@ -50,8 +50,24 @@ def split_audio(audio_path, chunk_duration=600):  # 10 minutos por chunk
         end = min(start + chunk_duration, duration)
         chunk = audio.subclip(start, end)
         chunk_path = f"{audio_path}_{start}_{end}.mp3"
-        chunk.write_audiofile(chunk_path)
-        chunks.append((chunk_path, start))
+        chunk.write_audiofile(chunk_path, bitrate="64k")  # Reduzindo a qualidade para manter o tamanho sob controle
+        
+        # Verificar o tamanho do arquivo
+        file_size = os.path.getsize(chunk_path)
+        if file_size > 25 * 1024 * 1024:  # Se o arquivo for maior que 25 MB
+            os.remove(chunk_path)  # Remove o arquivo grande
+            # Divide este chunk em dois menores
+            mid = (start + end) // 2
+            chunk1 = audio.subclip(start, mid)
+            chunk2 = audio.subclip(mid, end)
+            chunk_path1 = f"{audio_path}_{start}_{mid}.mp3"
+            chunk_path2 = f"{audio_path}_{mid}_{end}.mp3"
+            chunk1.write_audiofile(chunk_path1, bitrate="64k")
+            chunk2.write_audiofile(chunk_path2, bitrate="64k")
+            chunks.append((chunk_path1, start))
+            chunks.append((chunk_path2, mid))
+        else:
+            chunks.append((chunk_path, start))
     
     audio.close()
     return chunks

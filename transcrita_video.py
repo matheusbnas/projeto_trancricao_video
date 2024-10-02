@@ -211,7 +211,7 @@ def process_video(video_url):
             raise FileNotFoundError(f"O arquivo de áudio não foi criado: {audio_path}")
         
         # Dividir o áudio em chunks
-        audio_chunks = split_audio(audio_path, chunk_duration=600)  # 10 minutos por chunk
+        audio_chunks = split_audio(audio_path, chunk_duration=1200)  # 20 minutos por chunk
         full_transcript = ""
         
         logger.info(f"Iniciando transcrição de {len(audio_chunks)} chunks de áudio")
@@ -219,6 +219,9 @@ def process_video(video_url):
         # Processar cada chunk de áudio
         for i, (chunk_path, start_time) in enumerate(audio_chunks):
             logger.info(f"Processando chunk {i+1}/{len(audio_chunks)}")
+            chunk_size = os.path.getsize(chunk_path)
+            logger.info(f"Tamanho do chunk: {chunk_size / (1024 * 1024):.2f} MB")
+            
             chunk_transcript = transcreve_audio_chunk(chunk_path)
             adjusted_transcript = ajusta_tempo_srt(chunk_transcript, start_time)
             full_transcript += adjusted_transcript + "\n\n"
