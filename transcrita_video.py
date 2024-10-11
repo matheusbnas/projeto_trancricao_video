@@ -82,7 +82,7 @@ def check_password():
                         st.session_state["user_role"] = st.secrets["users"][username]["role"]
                         st.session_state["openai_api_key"] = openai_api_key
                         st.success("Login com sucesso")
-                        return True
+                        st.rerun()  # Força o recarregamento da página após o login bem-sucedido
                     else:
                         st.error("Chave da OpenAI API inválida")
                 else:

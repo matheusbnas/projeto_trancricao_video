@@ -72,44 +72,44 @@ def split_audio(audio_path, chunk_duration=1200):  # 20 minutos por chunk
     audio.close()
     return chunks
     
-def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
-    """Uploads a file to the bucket."""
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(destination_blob_name)
+# def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
+#     """Uploads a file to the bucket."""
+#     storage_client = storage.Client()
+#     bucket = storage_client.bucket(bucket_name)
+#     blob = bucket.blob(destination_blob_name)
 
-    blob.upload_from_filename(source_file_name)
+#     blob.upload_from_filename(source_file_name)
 
-    print(f"File {source_file_name} uploaded to {destination_blob_name}.")
-    return f"gs://{bucket_name}/{destination_blob_name}"
+#     print(f"File {source_file_name} uploaded to {destination_blob_name}.")
+#     return f"gs://{bucket_name}/{destination_blob_name}"
 
-def process_video_chunk(chunk, chunk_number, total_chunks, session_id, bucket_name):
-    chunk_dir = PASTA_TEMP / session_id
-    chunk_dir.mkdir(exist_ok=True)
-    chunk_file = chunk_dir / f"chunk_{chunk_number}.mp4"
+# def process_video_chunk(chunk, chunk_number, total_chunks, session_id, bucket_name):
+#     chunk_dir = PASTA_TEMP / session_id
+#     chunk_dir.mkdir(exist_ok=True)
+#     chunk_file = chunk_dir / f"chunk_{chunk_number}.mp4"
     
-    with open(chunk_file, "wb") as f:
-        f.write(chunk)
+#     with open(chunk_file, "wb") as f:
+#         f.write(chunk)
     
-    # Upload do chunk para o GCS
-    destination_blob_name = f"{session_id}/chunk_{chunk_number}.mp4"
-    gcs_path = upload_to_gcs(bucket_name, str(chunk_file), destination_blob_name)
+#     # Upload do chunk para o GCS
+#     destination_blob_name = f"{session_id}/chunk_{chunk_number}.mp4"
+#     gcs_path = upload_to_gcs(bucket_name, str(chunk_file), destination_blob_name)
     
-    if chunk_number == total_chunks - 1:
-        # Todos os chunks foram enviados, agora podemos combinar no GCS
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(bucket_name)
+#     if chunk_number == total_chunks - 1:
+#         # Todos os chunks foram enviados, agora podemos combinar no GCS
+#         storage_client = storage.Client()
+#         bucket = storage_client.bucket(bucket_name)
         
-        # Combinar todos os chunks em um único arquivo
-        combined_blob = bucket.blob(f"{session_id}/final_video.mp4")
-        combined_blob.compose([bucket.blob(f"{session_id}/chunk_{i}.mp4") for i in range(total_chunks)])
+#         # Combinar todos os chunks em um único arquivo
+#         combined_blob = bucket.blob(f"{session_id}/final_video.mp4")
+#         combined_blob.compose([bucket.blob(f"{session_id}/chunk_{i}.mp4") for i in range(total_chunks)])
         
-        # Deletar os chunks individuais
-        for i in range(total_chunks):
-            bucket.blob(f"{session_id}/chunk_{i}.mp4").delete()
+#         # Deletar os chunks individuais
+#         for i in range(total_chunks):
+#             bucket.blob(f"{session_id}/chunk_{i}.mp4").delete()
         
-        return f"gs://{bucket_name}/{session_id}/final_video.mp4"
-    return None
+#         return f"gs://{bucket_name}/{session_id}/final_video.mp4"
+#     return None
 
 def extrair_video_id(url):
     import re
@@ -245,16 +245,16 @@ def processa_srt(srt_content):
         transcript_text += f"{start_time} - {sub.content}\n"
     return transcript_text
 
-def txt_to_srt(txt_content):
-    lines = txt_content.split('\n')
-    subtitles = []
-    for i, line in enumerate(lines, start=1):
-        if line.strip():
-            start_time = datetime.timedelta(seconds=i*5)
-            end_time = start_time + datetime.timedelta(seconds=5)
-            subtitle = srt.Subtitle(index=i, start=start_time, end=end_time, content=line)
-            subtitles.append(subtitle)
-    return srt.compose(subtitles)
+# def txt_to_srt(txt_content):
+#     lines = txt_content.split('\n')
+#     subtitles = []
+#     for i, line in enumerate(lines, start=1):
+#         if line.strip():
+#             start_time = datetime.timedelta(seconds=i*5)
+#             end_time = start_time + datetime.timedelta(seconds=5)
+#             subtitle = srt.Subtitle(index=i, start=start_time, end=end_time, content=line)
+#             subtitles.append(subtitle)
+#     return srt.compose(subtitles)
 
 def create_download_link(file_path, link_text):
     with open(file_path, 'rb') as f:
