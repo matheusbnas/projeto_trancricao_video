@@ -71,45 +71,10 @@ def split_audio(audio_path, chunk_duration=1200):  # 20 minutos por chunk
     
     audio.close()
     return chunks
-    
-# def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
-#     """Uploads a file to the bucket."""
-#     storage_client = storage.Client()
-#     bucket = storage_client.bucket(bucket_name)
-#     blob = bucket.blob(destination_blob_name)
-
-#     blob.upload_from_filename(source_file_name)
-
-#     print(f"File {source_file_name} uploaded to {destination_blob_name}.")
-#     return f"gs://{bucket_name}/{destination_blob_name}"
-
-# def process_video_chunk(chunk, chunk_number, total_chunks, session_id, bucket_name):
-#     chunk_dir = PASTA_TEMP / session_id
-#     chunk_dir.mkdir(exist_ok=True)
-#     chunk_file = chunk_dir / f"chunk_{chunk_number}.mp4"
-    
-#     with open(chunk_file, "wb") as f:
-#         f.write(chunk)
-    
-#     # Upload do chunk para o GCS
-#     destination_blob_name = f"{session_id}/chunk_{chunk_number}.mp4"
-#     gcs_path = upload_to_gcs(bucket_name, str(chunk_file), destination_blob_name)
-    
-#     if chunk_number == total_chunks - 1:
-#         # Todos os chunks foram enviados, agora podemos combinar no GCS
-#         storage_client = storage.Client()
-#         bucket = storage_client.bucket(bucket_name)
-        
-#         # Combinar todos os chunks em um único arquivo
-#         combined_blob = bucket.blob(f"{session_id}/final_video.mp4")
-#         combined_blob.compose([bucket.blob(f"{session_id}/chunk_{i}.mp4") for i in range(total_chunks)])
-        
-#         # Deletar os chunks individuais
-#         for i in range(total_chunks):
-#             bucket.blob(f"{session_id}/chunk_{i}.mp4").delete()
-        
-#         return f"gs://{bucket_name}/{session_id}/final_video.mp4"
-#     return None
+ 
+###############################################
+#FUNÇÃO DE EXTRAÇÃO DE VÍDEO NO VIMEO E YOUTUBE
+###############################################
 
 def extrair_video_id(url):
     import re
@@ -230,17 +195,13 @@ def get_video_download_url(youtube, video_id):
 ########################################
 #FUNÇÃO DE PROCESSAMENTO E DOWNLOAD DO ARQUIVO SRT
 ########################################
-def ajusta_tempo_srt(srt_content, offset):
-    subtitles = list(srt.parse(srt_content))
-    for sub in subtitles:
-        sub.start += datetime.timedelta(seconds=offset)
-        sub.end += datetime.timedelta(seconds=offset)
-    return srt.compose(subtitles)
 
 def processa_srt(srt_content):
     subtitles = list(srt.parse(srt_content))
     transcript_text = ""
     for sub in subtitles:
+        # Limpa os asteriscos do conteúdo
+        sub.content = sub.content.replace('*', '')
         start_time = str(sub.start).split('.')[0]  # Remove microssegundos
         transcript_text += f"{start_time} - {sub.content}\n"
     return transcript_text
@@ -278,6 +239,8 @@ def processa_srt_sem_timestamp(srt_content):
     subtitles = list(srt.parse(srt_content))
     transcript_text = ""
     for sub in subtitles:
+        # Limpa os asteriscos do conteúdo
+        sub.content = sub.content.replace('*', '')
         transcript_text += f"{sub.content}\n"
     return transcript_text
 
@@ -300,16 +263,30 @@ def gera_srt_do_resumo(resumo, duracao_total_segundos):
                 end_time = start_time + datetime.timedelta(seconds=int(tempo_por_linha))
             else:
                 content = linha
-
+            
+            # Limpa os asteriscos do conteúdo
+            content = content.strip().replace('*', '')
+            
             subtitle = srt.Subtitle(
                 index=i,
                 start=start_time,
                 end=end_time,
-                content=linha.strip()
+                content=content
             )
             subtitles.append(subtitle)
-    return srt.compose(subtitles)
     
+    # Gera o conteúdo SRT limpo
+    return srt.compose(subtitles)
+
+def ajusta_tempo_srt(srt_content, offset):
+    subtitles = list(srt.parse(srt_content))
+    for sub in subtitles:
+        # Limpa os asteriscos do conteúdo
+        sub.content = sub.content.replace('*', '')
+        sub.start += datetime.timedelta(seconds=offset)
+        sub.end += datetime.timedelta(seconds=offset)
+    return srt.compose(subtitles)
+
 ########################################
 #FUNÇÃO DE CRIAÇÃO E DOWNLOAD DE ARQUIVO PDF
 ########################################
