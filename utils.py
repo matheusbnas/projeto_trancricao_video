@@ -206,16 +206,6 @@ def processa_srt(srt_content):
         transcript_text += f"{start_time} - {sub.content}\n"
     return transcript_text
 
-# def txt_to_srt(txt_content):
-#     lines = txt_content.split('\n')
-#     subtitles = []
-#     for i, line in enumerate(lines, start=1):
-#         if line.strip():
-#             start_time = datetime.timedelta(seconds=i*5)
-#             end_time = start_time + datetime.timedelta(seconds=5)
-#             subtitle = srt.Subtitle(index=i, start=start_time, end=end_time, content=line)
-#             subtitles.append(subtitle)
-#     return srt.compose(subtitles)
 
 def create_download_link(file_path, link_text):
     with open(file_path, 'rb') as f:
@@ -223,17 +213,6 @@ def create_download_link(file_path, link_text):
     b64 = base64.b64encode(data).decode()
     href = f'<a href="data:file/txt;base64,{b64}" download="{os.path.basename(file_path)}">{link_text}</a>'
     return href
-
-def formata_resumo_com_links(resumo_srt, video_path):
-    subtitles = list(srt.parse(resumo_srt))
-    resumo_formatado = ""
-    for sub in subtitles:
-        segundos_totais = int(sub.start.total_seconds())
-        minutos, segundos = divmod(segundos_totais, 60)
-        timestamp = f"{minutos:02d}:{segundos:02d}"
-        link = f'<a href="#" onclick="seekVideo(\'{video_path}\', {segundos_totais}); return false;">[{timestamp}]</a>'
-        resumo_formatado += f"{link} - {sub.content}<br>"
-    return resumo_formatado
 
 def processa_srt_sem_timestamp(srt_content):
     subtitles = list(srt.parse(srt_content))

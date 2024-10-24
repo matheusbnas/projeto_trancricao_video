@@ -366,58 +366,148 @@ def transcribe_youtube_video(video_url):
 ########################################
 #FUNÇÕES DE PROCESSO DE TRANSCRIÇÃO EM SRT E PDF
 ########################################  
-def process_transcription(srt_content, model, max_tokens, temperature, video_path):
-    resumo = gera_resumo_tldv(srt_content, model, max_tokens, temperature)
-    transcript_srt = srt_content
+def generate_summarized_srt_from_full(srt_content, client, model):
+    """
+    Generate a summarized SRT that maintains timing but provides concise summaries
+    of key points with numerical bullets.
+    """
+    segments = []
+    current_segment = {}
+    current_text = []
+    
+    # Parse original SRT content
+    for line in srt_content.strip().split('\n'):
+        line = line.strip()
+        if line.isdigit():  # Segment number
+            if current_segment:
+                current_segment['text'] = ' '.join(current_text)
+                segments.append(current_segment)
+                current_segment = {}
+                current_text = []
+        elif '-->' in line:  # Timestamp
+            start, end = line.split(' --> ')
+            current_segment['start_time'] = start.strip()
+            current_segment['end_time'] = end.strip()
+        elif line:  # Content
+            current_text.append(line)
+    
+    # Add last segment if exists
+    if current_segment and current_text:
+        current_segment['text'] = ' '.join(current_text)
+        segments.append(current_segment)
+    
+    # Group segments into meaningful chunks (e.g., ~30 seconds worth of content)
+    chunk_size = 3  # Adjust based on your needs
+    chunks = [segments[i:i + chunk_size] 
+             for i in range(0, len(segments), chunk_size)]
+    
+    # Generate summaries for each chunk
+    summarized_segments = []
+    for i, chunk in enumerate(chunks, 1):
+        # Combine text from segments in chunk
+        chunk_text = " ".join(seg['text'] for seg in chunk)
+        
+        # Generate summary using OpenAI
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": """You are an expert at creating structured summaries. 
+                Create a clear, numbered point that captures the main idea. Use the format:
+                '{number}. {key topic}: {concise explanation}'"""},
+                {"role": "user", "content": f"Summarize this segment into a single numbered point, maintaining the key topic and its explanation: {chunk_text}"}
+            ],
+            max_tokens=150,
+            temperature=0.4
+        )
+        
+        summary = f"{i}. {response.choices[0].message.content}"
+        
+        # Create new segment with summary
+        summarized_segments.append({
+            'start_time': chunk[0]['start_time'],
+            'end_time': chunk[-1]['end_time'],
+            'text': summary
+        })
+    
+    # Convert summarized segments back to SRT format
+    srt_output = ""
+    for i, segment in enumerate(summarized_segments, 1):
+        srt_output += f"{i}\n"
+        srt_output += f"{segment['start_time']} --> {segment['end_time']}\n"
+        srt_output += f"{segment['text']}\n\n"
+    
+    return srt_output
 
-    # Obter a duração total do vídeo
+def process_transcription(srt_content, model, max_tokens, temperature, video_path):
+    client = get_openai_client()
+    if not client:
+        return
+
+    # Generate regular summary
+    resumo = gera_resumo_tldv(srt_content, model, max_tokens, temperature)
+    
+    # Generate summarized SRT
+    summarized_srt = generate_summarized_srt_from_full(srt_content, client, model)
+
+    # Get video duration
     with VideoFileClip(video_path) as video:
         duracao_total_segundos = int(video.duration)
 
     st.success("Processamento concluído!")
 
-    tab2, tab3 = st.tabs(["Resumo das Pautas Importantes", "Transcrição Completa"])
+    # Create tabs for display
+    tab1, tab2, tab3 = st.tabs([
+        "Transcrição Resumida",
+        "Resumo das Pautas Importantes",
+        "Transcrição Completa"
+    ])
+
+    with tab1:
+        st.text_area("Transcrição Resumida (SRT)", summarized_srt, height=300)
 
     with tab2:
         st.markdown(resumo)
 
     with tab3:
-        st.text_area("Transcrição", processa_srt(transcript_srt), height=300)
+        st.text_area("Transcrição Completa", processa_srt(srt_content), height=300)
 
-    # Criar PDFs e SRTs
+    # Create PDFs and SRTs
     resumo_pdf = create_pdf(resumo, "resumo.pdf")
-    transcript_pdf = create_pdf(processa_srt_sem_timestamp(transcript_srt), "transcricao_completa.pdf")
+    transcript_pdf = create_pdf(processa_srt_sem_timestamp(srt_content), "transcricao_completa.pdf")
+    summarized_pdf = create_pdf(processa_srt_sem_timestamp(summarized_srt), "transcricao_resumida.pdf")
     
-    resumo_srt = gera_srt_do_resumo(resumo, duracao_total_segundos)
-    
-    resumo_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt', encoding='utf-8')
-    resumo_srt_file.write(resumo_srt)
-    resumo_srt_file.close()
+    # Save SRT files
+    summarized_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt', encoding='utf-8')
+    summarized_srt_file.write(summarized_srt)
+    summarized_srt_file.close()
     
     transcript_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt', encoding='utf-8')
-    transcript_srt_file.write(transcript_srt)
+    transcript_srt_file.write(srt_content)
     transcript_srt_file.close()
 
-    # Criar abas para download
+    # Download section
     st.subheader("Download dos Arquivos")
-    tab1, tab2 = st.tabs(["Resumo", "Transcrição Completa"])
+    tab1, tab2, tab3 = st.tabs(["Transcrição Resumida", "Resumo", "Transcrição Completa"])
     
     with tab1:
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(create_download_link_pdf(resumo_pdf, "Baixar Resumo (PDF)", "resumo.pdf"), unsafe_allow_html=True)
+            st.markdown(create_download_link_pdf(summarized_pdf, "Baixar Transcrição Resumida (PDF)", "transcricao_resumida.pdf"), unsafe_allow_html=True)
         with col2:
-            st.markdown(create_download_link(resumo_srt_file.name, "Baixar Resumo (SRT)"), unsafe_allow_html=True)
-
+            st.markdown(create_download_link(summarized_srt_file.name, "Baixar Transcrição Resumida (SRT)"), unsafe_allow_html=True)
+        
     with tab2:
+        st.markdown(create_download_link_pdf(resumo_pdf, "Baixar Resumo (PDF)", "resumo.pdf"), unsafe_allow_html=True)
+            
+    with tab3:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown(create_download_link_pdf(transcript_pdf, "Baixar Transcrição Completa (PDF)", "transcricao_completa.pdf"), unsafe_allow_html=True)
         with col2:
             st.markdown(create_download_link(transcript_srt_file.name, "Baixar Transcrição Completa (SRT)"), unsafe_allow_html=True)
 
-    # Limpar arquivos temporários
-    for file in [resumo_srt_file.name, transcript_srt_file.name]:
+    # Cleanup temporary files
+    for file in [summarized_srt_file.name, transcript_srt_file.name]:
         try:
             os.remove(file)
         except Exception as e:
