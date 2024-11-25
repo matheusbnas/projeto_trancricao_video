@@ -7,7 +7,6 @@ import re
 import logging
 from utils import *
 import math
-from whisperx import load_model, transcribe
 
 # Load environment variables
 _ = load_dotenv(find_dotenv())
@@ -135,10 +134,10 @@ def transcreve_audio_chunk(chunk_path, prompt=""):
         return transcricao
 
 # Função para usar o modelo WhisperX
-def transcribe_with_whisperx(video_path):
-    model = load_model("base")
-    result = transcribe(model, video_path, task="transcribe", language="pt")
-    return result.text
+# def transcribe_with_whisperx(video_path):
+#     model = load_model("base")
+#     result = transcribe(model, video_path, task="transcribe", language="pt")
+#     return result.text
 
 @st.cache_data
 def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
