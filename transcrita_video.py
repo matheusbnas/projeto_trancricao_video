@@ -407,7 +407,8 @@ def generate_summarized_srt_from_full(srt_content, client, model):
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": """Você é um especialista em criar resumos estruturados em português do Brasil.
+                {"role": "system", 
+                "content": """Você é um especialista em criar resumos estruturados em português do Brasil.
                 Para cada segmento, forneça um resumo EXATAMENTE neste formato:
 
                 Título do tópico: Explicação concisa e direta do conteúdo.
@@ -418,7 +419,8 @@ def generate_summarized_srt_from_full(srt_content, client, model):
                 
                 Exemplo exato do formato:
                 Curso Intensivo sobre Nietzsche: O curso foca em uma das obras mais significativas de Nietzsche, considerada por alguns como uma das maiores contribuições da humanidade."""},
-                {"role": "user", "content": f"Resuma este segmento no formato especificado: {chunk_text}"}
+                {"role": "user", 
+                "content": f"Resuma este segmento no formato especificado: {chunk_text}"}
             ],
             max_tokens=150,
             temperature=0.4
