@@ -76,6 +76,7 @@ def split_audio(audio_path, chunk_duration=1200):  # 20 minutos por chunk
 #FUNÇÃO DE EXTRAÇÃO DE VÍDEO NO VIMEO E YOUTUBE
 ###############################################
 
+###### VIMEO #####
 def extrair_video_id(url):
     import re
     match = re.search(r'vimeo.com/(\d+)', url)
@@ -108,6 +109,8 @@ def get_vimeo_video_link(video_url, vimeo_client):
         logger.exception(f"Erro ao obter link do vídeo do Vimeo: {str(e)}")
         return None
 
+
+#### YOUTUBE ####
 def get_authenticated_service():
     scopes = ["https://www.googleapis.com/auth/youtube.force-ssl"]
     credentials = None
