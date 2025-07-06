@@ -1,18 +1,16 @@
-streamlit == 1.37.1
-google-api-python-client==2.147.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.1
-google-auth==2.35.0
-google-cloud-storage==2.18.2
+streamlit
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+google-auth
+google-cloud-storage
 moviepy==1.0.3
-pydub == 0.25.1
-whisper == 1.1.10
-ipykernel
+pydub
+whisper
 openai
 python-dotenv
 streamlit_webrtc
-srt == 3.5.3
-reportlab==4.2.2
-PyVimeo==1.1.2
-pysrt==1.1.2
-wave>=0.0.2
+srt
+reportlab
+PyVimeo
+pysrt
