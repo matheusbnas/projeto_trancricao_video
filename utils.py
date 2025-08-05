@@ -47,17 +47,32 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 # FUNÇÕES DE AUTENTICAÇÃO E BUSCA NO GOOGLE DRIVE
 ########################################
 
+
 def get_drive_service():
     """
     Obtém o serviço autenticado do Google Drive
     """
+    # Debug: verificar se os secrets estão disponíveis
+    if hasattr(st, 'secrets'):
+        st.info(f"🔍 Secrets disponíveis: {list(st.secrets.keys())}")
+        if 'client_id' in st.secrets:
+            st.info(
+                f"✅ client_id encontrado: {st.secrets.get('client_id')[:20]}...")
+        if 'client_secret' in st.secrets:
+            st.info(
+                f"✅ client_secret encontrado: {st.secrets.get('client_secret')[:10]}...")
+        if 'project_id' in st.secrets:
+            st.info(f"✅ project_id encontrado: {st.secrets.get('project_id')}")
+    else:
+        st.warning("⚠️ Streamlit secrets não disponível")
+
     creds = None
-    
+
     # Verifica se existe arquivo de token
     if os.path.exists('drive_token.pickle'):
         with open('drive_token.pickle', 'rb') as token:
             creds = pickle.load(token)
-    
+
     # Se não há credenciais válidas, faz a autenticação
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -68,6 +83,7 @@ def get_drive_service():
                 if hasattr(st, 'secrets'):
                     # Verificar se as credenciais estão no nível raiz dos secrets
                     if 'client_id' in st.secrets and 'client_secret' in st.secrets:
+                        st.info("🔑 Usando credenciais do Streamlit secrets...")
                         # Criar configuração de credenciais a partir dos secrets
                         client_config = {
                             "web": {
@@ -85,14 +101,15 @@ def get_drive_service():
                                 ]
                             }
                         }
-                        
+
                         flow = InstalledAppFlow.from_client_config(
                             client_config, SCOPES)
                         creds = flow.run_local_server(port=8080)
-                        
+
                     elif 'google_drive' in st.secrets:
+                        st.info("🔑 Usando credenciais da seção google_drive...")
                         google_drive_secrets = st.secrets['google_drive']
-                        
+
                         # Criar configuração de credenciais a partir dos secrets
                         client_config = {
                             "web": {
@@ -110,45 +127,55 @@ def get_drive_service():
                                 ]
                             }
                         }
-                        
+
                         flow = InstalledAppFlow.from_client_config(
                             client_config, SCOPES)
                         creds = flow.run_local_server(port=8080)
-                    
+
                     else:
-                        st.error("Credenciais do Google Drive não encontradas nos secrets do Streamlit.")
-                        st.info("Configure as credenciais no arquivo .streamlit/secrets.toml ou no painel do Streamlit Cloud.")
+                        st.error(
+                            "❌ Credenciais do Google Drive não encontradas nos secrets do Streamlit.")
+                        st.info(
+                            "💡 Configure as credenciais no painel do Streamlit Cloud:")
+                        st.info("   - client_id")
+                        st.info("   - client_secret")
+                        st.info("   - project_id")
                         return None
-                        
+
                 elif os.path.exists('credentials.json'):
                     # Usar arquivo de credenciais local (apenas para desenvolvimento)
+                    st.info("🔑 Usando arquivo credentials.json local...")
                     flow = InstalledAppFlow.from_client_secrets_file(
                         'credentials.json', SCOPES)
                     creds = flow.run_local_server(port=8080)
                 else:
-                    st.error("Credenciais do Google Drive não encontradas.")
-                    st.info("Para desenvolvimento local: crie um arquivo credentials.json")
-                    st.info("Para produção: configure as credenciais no Streamlit Cloud")
+                    st.error("❌ Credenciais do Google Drive não encontradas.")
+                    st.info(
+                        "💡 Para desenvolvimento local: crie um arquivo credentials.json")
+                    st.info(
+                        "💡 Para produção: configure as credenciais no Streamlit Cloud")
                     return None
-                    
+
             except Exception as e:
                 st.error(f"Erro na autenticação do Google Drive: {str(e)}")
                 logger.error(f"Erro na autenticação: {str(e)}")
                 return None
-        
+
         # Salva as credenciais para próxima execução (apenas localmente)
         try:
             with open('drive_token.pickle', 'wb') as token:
                 pickle.dump(creds, token)
         except Exception as e:
-            logger.warning(f"Não foi possível salvar token localmente: {str(e)}")
-    
+            logger.warning(
+                f"Não foi possível salvar token localmente: {str(e)}")
+
     try:
         service = build('drive', 'v3', credentials=creds)
         return service
     except Exception as e:
         logger.error(f"Erro ao criar serviço do Drive: {str(e)}")
         return None
+
 
 def search_videos_in_drive(service, query=None, folder_id=None):
     """
@@ -157,13 +184,13 @@ def search_videos_in_drive(service, query=None, folder_id=None):
     try:
         # Construir a query de busca
         search_query = "mimeType contains 'video/'"
-        
+
         if query:
             search_query += f" and name contains '{query}'"
-        
+
         if folder_id:
             search_query += f" and '{folder_id}' in parents"
-        
+
         # Buscar arquivos
         results = service.files().list(
             q=search_query,
@@ -171,19 +198,20 @@ def search_videos_in_drive(service, query=None, folder_id=None):
             fields='nextPageToken, files(id, name, mimeType, size, createdTime)',
             orderBy='createdTime desc'
         ).execute()
-        
+
         files = results.get('files', [])
-        
+
         if not files:
             st.info("Nenhum vídeo encontrado no Google Drive.")
             return []
-        
+
         return files
-        
+
     except Exception as e:
         logger.error(f"Erro ao buscar vídeos no Drive: {str(e)}")
         st.error(f"Erro ao buscar vídeos no Drive: {str(e)}")
         return []
+
 
 def download_video_from_drive(service, file_id, filename):
     """
@@ -194,27 +222,28 @@ def download_video_from_drive(service, file_id, filename):
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         temp_path = temp_file.name
         temp_file.close()
-        
+
         # Fazer download do arquivo
         request = service.files().get_media(fileId=file_id)
         fh = open(temp_path, 'wb')
         downloader = MediaIoBaseDownload(fh, request)
-        
+
         done = False
         while done is False:
             status, done = downloader.next_chunk()
             if status:
                 progress = int(status.progress() * 100)
                 st.progress(progress / 100)
-        
+
         fh.close()
-        
+
         return temp_path
-        
+
     except Exception as e:
         logger.error(f"Erro ao fazer download do vídeo: {str(e)}")
         st.error(f"Erro ao fazer download do vídeo: {str(e)}")
         return None
+
 
 def get_video_parent_folder(service, file_id):
     """
@@ -225,31 +254,35 @@ def get_video_parent_folder(service, file_id):
             fileId=file_id,
             fields='parents,name'
         ).execute()
-        
+
         parents = file_metadata.get('parents', [])
         file_name = file_metadata.get('name', 'Unknown')
-        
-        logger.info(f"Arquivo '{file_name}' (ID: {file_id}) - Pais encontrados: {parents}")
-        
+
+        logger.info(
+            f"Arquivo '{file_name}' (ID: {file_id}) - Pais encontrados: {parents}")
+
         if parents:
             parent_id = parents[0]  # Retorna o primeiro parent (pasta pai)
             logger.info(f"Pasta pai do arquivo '{file_name}': {parent_id}")
             return parent_id
         else:
-            logger.warning(f"Arquivo '{file_name}' não tem pasta pai (está na raiz do Drive)")
+            logger.warning(
+                f"Arquivo '{file_name}' não tem pasta pai (está na raiz do Drive)")
             return None  # Arquivo está na raiz do Drive
-            
+
     except Exception as e:
         logger.error(f"Erro ao obter pasta pai do vídeo {file_id}: {str(e)}")
         return None
+
 
 def upload_file_to_drive(service, file_path, filename, parent_folder_id=None, mime_type=None):
     """
     Faz upload de um arquivo para o Google Drive
     """
     try:
-        logger.info(f"Iniciando upload do arquivo '{filename}' para pasta: {parent_folder_id}")
-        
+        logger.info(
+            f"Iniciando upload do arquivo '{filename}' para pasta: {parent_folder_id}")
+
         # Determinar o MIME type baseado na extensão do arquivo
         if not mime_type:
             if filename.endswith('.pdf'):
@@ -260,110 +293,121 @@ def upload_file_to_drive(service, file_path, filename, parent_folder_id=None, mi
                 mime_type = 'text/plain'
             else:
                 mime_type = 'application/octet-stream'
-        
+
         # Preparar os metadados do arquivo
         file_metadata = {
             'name': filename,
             'parents': [parent_folder_id] if parent_folder_id else []
         }
-        
+
         logger.info(f"Metadados do arquivo: {file_metadata}")
-        
+
         # Criar o media upload
         media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
-        
+
         # Fazer o upload
         file = service.files().create(
             body=file_metadata,
             media_body=media,
             fields='id,name,webViewLink'
         ).execute()
-        
-        logger.info(f"Arquivo '{filename}' enviado para o Google Drive com sucesso! ID: {file.get('id')}")
+
+        logger.info(
+            f"Arquivo '{filename}' enviado para o Google Drive com sucesso! ID: {file.get('id')}")
         return file
-        
+
     except Exception as e:
         logger.error(f"Erro ao fazer upload do arquivo '{filename}': {str(e)}")
         st.error(f"Erro ao fazer upload do arquivo '{filename}': {str(e)}")
         return None
+
 
 def save_transcription_to_drive(service, video_file_id, transcription_content, summary_content, video_name):
     """
     Salva os arquivos de transcrição na mesma pasta do vídeo original no Google Drive
     """
     try:
-        logger.info(f"Iniciando salvamento de transcrição para vídeo '{video_name}' (ID: {video_file_id})")
-        
+        logger.info(
+            f"Iniciando salvamento de transcrição para vídeo '{video_name}' (ID: {video_file_id})")
+
         # Obter a pasta pai do vídeo
         parent_folder_id = get_video_parent_folder(service, video_file_id)
-        
+
         logger.info(f"Pasta pai determinada: {parent_folder_id}")
-        
+
         if not parent_folder_id:
-            st.warning("Não foi possível determinar a pasta do vídeo. Os arquivos serão salvos na raiz do Drive.")
-            logger.warning(f"Vídeo '{video_name}' não tem pasta pai - salvando na raiz do Drive")
-        
+            st.warning(
+                "Não foi possível determinar a pasta do vídeo. Os arquivos serão salvos na raiz do Drive.")
+            logger.warning(
+                f"Vídeo '{video_name}' não tem pasta pai - salvando na raiz do Drive")
+
         # Criar arquivos temporários
         temp_files = []
         uploaded_files = []
-        
+
         # 1. Arquivo SRT da transcrição completa
         srt_filename = f"{video_name}_transcricao_completa.srt"
-        srt_temp_path = tempfile.NamedTemporaryFile(delete=False, suffix='.srt', mode='w', encoding='utf-8')
+        srt_temp_path = tempfile.NamedTemporaryFile(
+            delete=False, suffix='.srt', mode='w', encoding='utf-8')
         srt_temp_path.write(transcription_content)
         srt_temp_path.close()
         temp_files.append(srt_temp_path.name)
-        
+
         # Upload do SRT
-        srt_file = upload_file_to_drive(service, srt_temp_path.name, srt_filename, parent_folder_id)
+        srt_file = upload_file_to_drive(
+            service, srt_temp_path.name, srt_filename, parent_folder_id)
         if srt_file:
             uploaded_files.append({
                 'name': srt_filename,
                 'link': srt_file.get('webViewLink'),
                 'type': 'Transcrição Completa (SRT)'
             })
-        
+
         # 2. Arquivo PDF do resumo
         pdf_filename = f"{video_name}_resumo.pdf"
         pdf_buffer = create_pdf(summary_content, pdf_filename)
-        pdf_temp_path = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+        pdf_temp_path = tempfile.NamedTemporaryFile(
+            delete=False, suffix='.pdf')
         pdf_temp_path.write(pdf_buffer.getvalue())
         pdf_temp_path.close()
         temp_files.append(pdf_temp_path.name)
-        
+
         # Upload do PDF
-        pdf_file = upload_file_to_drive(service, pdf_temp_path.name, pdf_filename, parent_folder_id)
+        pdf_file = upload_file_to_drive(
+            service, pdf_temp_path.name, pdf_filename, parent_folder_id)
         if pdf_file:
             uploaded_files.append({
                 'name': pdf_filename,
                 'link': pdf_file.get('webViewLink'),
                 'type': 'Resumo (PDF)'
             })
-        
+
         # 3. Arquivo PDF da transcrição completa
         pdf_full_filename = f"{video_name}_transcricao_completa.pdf"
         pdf_full_buffer = create_pdf(transcription_content, pdf_full_filename)
-        pdf_full_temp_path = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+        pdf_full_temp_path = tempfile.NamedTemporaryFile(
+            delete=False, suffix='.pdf')
         pdf_full_temp_path.write(pdf_full_buffer.getvalue())
         pdf_full_temp_path.close()
         temp_files.append(pdf_full_temp_path.name)
-        
+
         # Upload do PDF completo
-        pdf_full_file = upload_file_to_drive(service, pdf_full_temp_path.name, pdf_full_filename, parent_folder_id)
+        pdf_full_file = upload_file_to_drive(
+            service, pdf_full_temp_path.name, pdf_full_filename, parent_folder_id)
         if pdf_full_file:
             uploaded_files.append({
                 'name': pdf_full_filename,
                 'link': pdf_full_file.get('webViewLink'),
                 'type': 'Transcrição Completa (PDF)'
             })
-        
+
         # Limpar arquivos temporários
         for temp_file in temp_files:
             try:
                 os.unlink(temp_file)
             except:
                 pass
-        
+
         # Verificar se os arquivos foram salvos corretamente
         for file_info in uploaded_files:
             try:
@@ -374,16 +418,19 @@ def save_transcription_to_drive(service, video_file_id, transcription_content, s
                         fields='parents,name'
                     ).execute()
                     actual_parents = file_metadata.get('parents', [])
-                    logger.info(f"Arquivo '{file_metadata.get('name')}' salvo na pasta: {actual_parents}")
+                    logger.info(
+                        f"Arquivo '{file_metadata.get('name')}' salvo na pasta: {actual_parents}")
             except Exception as e:
-                logger.warning(f"Erro ao verificar localização do arquivo: {str(e)}")
-        
+                logger.warning(
+                    f"Erro ao verificar localização do arquivo: {str(e)}")
+
         return uploaded_files
-        
+
     except Exception as e:
         logger.error(f"Erro ao salvar transcrição no Drive: {str(e)}")
         st.error(f"Erro ao salvar transcrição no Drive: {str(e)}")
         return []
+
 
 def get_folder_id_from_url(url):
     """
@@ -396,17 +443,18 @@ def get_folder_id_from_url(url):
             r'drive\.google\.com/open\?id=([a-zA-Z0-9_-]+)',
             r'drive\.google\.com/drive/u/\d+/folders/([a-zA-Z0-9_-]+)'
         ]
-        
+
         for pattern in patterns:
             match = re.search(pattern, url)
             if match:
                 return match.group(1)
-        
+
         return None
-        
+
     except Exception as e:
         logger.error(f"Erro ao extrair ID da pasta: {str(e)}")
         return None
+
 
 def list_drive_folders(service):
     """
@@ -419,13 +467,14 @@ def list_drive_folders(service):
             fields='nextPageToken, files(id, name)',
             orderBy='name'
         ).execute()
-        
+
         folders = results.get('files', [])
         return folders
-        
+
     except Exception as e:
         logger.error(f"Erro ao listar pastas: {str(e)}")
         return []
+
 
 def debug_folder_access(service, folder_id):
     """
@@ -433,30 +482,31 @@ def debug_folder_access(service, folder_id):
     """
     try:
         logger.info(f"Testando acesso à pasta: {folder_id}")
-        
+
         # Tentar obter informações da pasta
         folder_metadata = service.files().get(
             fileId=folder_id,
             fields='id,name,parents'
         ).execute()
-        
-        logger.info(f"Pasta encontrada: {folder_metadata.get('name')} (ID: {folder_metadata.get('id')})")
+
+        logger.info(
+            f"Pasta encontrada: {folder_metadata.get('name')} (ID: {folder_metadata.get('id')})")
         logger.info(f"Pais da pasta: {folder_metadata.get('parents', [])}")
-        
+
         # Listar arquivos na pasta
         files_in_folder = service.files().list(
             q=f"'{folder_id}' in parents",
             fields='files(id, name, mimeType)',
             pageSize=10
         ).execute()
-        
+
         files = files_in_folder.get('files', [])
         logger.info(f"Arquivos encontrados na pasta: {len(files)}")
         for file in files:
             logger.info(f"  - {file.get('name')} ({file.get('mimeType')})")
-        
+
         return True
-        
+
     except Exception as e:
         logger.error(f"Erro ao acessar pasta {folder_id}: {str(e)}")
         return False
