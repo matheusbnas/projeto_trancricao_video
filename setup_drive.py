@@ -12,8 +12,7 @@ from google.auth.transport.requests import Request
 import pickle
 
 # Configurações do Google Drive
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly',
-          'https://www.googleapis.com/auth/drive.file']
+SCOPES = ['https://www.googleapis.com/auth/drive']
 
 
 def setup_google_drive():

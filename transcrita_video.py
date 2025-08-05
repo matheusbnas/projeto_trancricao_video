@@ -469,39 +469,6 @@ def generate_summarized_srt_from_full(srt_content, client, model):
     return srt_output, text_only_output
 
 
-def process_single_video(drive_service, video_id, video_name, model, max_tokens, temperature):
-    """
-    Processa um vídeo individual do Google Drive
-    """
-    try:
-        # Download do vídeo
-        temp_video_path = download_video_from_drive(
-            drive_service, video_id, video_name)
-
-        if temp_video_path:
-            # Processar transcrição
-            srt_content = process_video(temp_video_path)
-            if srt_content:
-                st.success("✅ Transcrição concluída!")
-                # Processar e salvar no Drive
-                process_transcription(srt_content, model, max_tokens, temperature,
-                                      video_name, None, drive_service, video_id)
-            else:
-                st.error("❌ Não foi possível realizar a transcrição.")
-
-            # Limpar arquivo temporário
-            try:
-                os.remove(temp_video_path)
-            except:
-                pass
-        else:
-            st.error("❌ Erro ao fazer download do vídeo.")
-
-    except Exception as e:
-        st.error(f"❌ Erro durante a transcrição: {str(e)}")
-        logger.exception("Erro durante a transcrição do vídeo do Drive")
-
-
 def process_transcription(srt_content, model, max_tokens, temperature, video_path_or_filename, duration_seconds=None, drive_service=None, video_file_id=None):
     client = get_openai_client()
     if not client:
@@ -758,106 +725,7 @@ def page(model, max_tokens, temperature):
                 "Listar todos os vídeos"
             ])
 
-            if search_option == "Transcrever vídeo por URL do Drive":
-                drive_url = st.text_input(
-                    "Cole aqui o link do vídeo ou pasta do Google Drive:",
-                    placeholder="https://drive.google.com/file/d/VIDEO_ID/view ou https://drive.google.com/drive/folders/FOLDER_ID"
-                )
-
-                if drive_url:
-                    if st.button("🎬 Processar Drive"):
-                        with st.spinner("Analisando conteúdo do Google Drive..."):
-                            try:
-                                # Verificar se é URL de arquivo ou pasta
-                                if '/file/d/' in drive_url:
-                                    # É um arquivo específico
-                                    video_id = drive_url.split(
-                                        '/file/d/')[1].split('/')[0]
-
-                                    # Obter informações do vídeo
-                                    try:
-                                        video_metadata = drive_service.files().get(
-                                            fileId=video_id,
-                                            fields='id,name,size,parents'
-                                        ).execute()
-
-                                        video_name = video_metadata.get(
-                                            'name', 'video_drive')
-                                        st.info(
-                                            f"📹 Processando arquivo: {video_name}")
-
-                                        # Processar o vídeo
-                                        process_single_video(
-                                            drive_service, video_id, video_name, model, max_tokens, temperature)
-
-                                    except Exception as e:
-                                        st.error(
-                                            f"❌ Erro ao acessar o arquivo: {str(e)}")
-                                        return
-
-                                elif '/drive/folders/' in drive_url or '/folders/' in drive_url:
-                                    # É uma pasta
-                                    folder_id = None
-                                    if '/drive/folders/' in drive_url:
-                                        folder_id = drive_url.split(
-                                            '/drive/folders/')[1].split('/')[0]
-                                    elif '/folders/' in drive_url:
-                                        folder_id = drive_url.split(
-                                            '/folders/')[1].split('/')[0]
-
-                                    if not folder_id:
-                                        st.error(
-                                            "❌ Não foi possível extrair o ID da pasta da URL fornecida.")
-                                        return
-
-                                    # Buscar vídeos na pasta
-                                    videos = search_videos_in_drive(
-                                        drive_service, folder_id=folder_id)
-
-                                    if videos:
-                                        st.success(
-                                            f"✅ Encontrados {len(videos)} vídeo(s) na pasta!")
-                                        st.subheader(
-                                            "📹 Vídeos disponíveis para transcrição:")
-
-                                        for i, video in enumerate(videos):
-                                            col1, col2, col3 = st.columns(
-                                                [3, 1, 1])
-                                            with col1:
-                                                st.write(
-                                                    f"**{video['name']}**")
-                                                if 'size' in video:
-                                                    size_mb = int(
-                                                        video['size']) / (1024 * 1024)
-                                                    st.write(
-                                                        f"Tamanho: {size_mb:.2f} MB")
-                                            with col2:
-                                                if st.button(f"🎬 Transcrever", key=f"transcribe_folder_{video['id']}"):
-                                                    with st.spinner(f"Processando {video['name']}..."):
-                                                        process_single_video(
-                                                            drive_service, video['id'], video['name'], model, max_tokens, temperature)
-                                            with col3:
-                                                st.write("")
-                                    else:
-                                        st.warning(
-                                            "⚠️ Nenhum vídeo encontrado nesta pasta.")
-
-                                else:
-                                    st.error(
-                                        "❌ URL não reconhecida. Use uma URL de arquivo ou pasta do Google Drive.")
-                                    st.info("💡 Formatos aceitos:")
-                                    st.info(
-                                        "• Arquivo: https://drive.google.com/file/d/VIDEO_ID/view")
-                                    st.info(
-                                        "• Pasta: https://drive.google.com/drive/folders/FOLDER_ID")
-
-                            except Exception as e:
-                                st.error(
-                                    f"❌ Erro durante o processamento: {str(e)}")
-                                logger.exception(
-                                    "Erro durante o processamento do Drive")
-
-            elif search_option == "Buscar por nome":
+            if search_option == "Buscar por nome":
                 search_query = st.text_input(
                     "Digite o nome do vídeo para buscar:")
                 if search_query:

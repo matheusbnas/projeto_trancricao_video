@@ -41,7 +41,7 @@ ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
 MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
 
 # Configurações do Google Drive
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/drive.file']
+SCOPES = ['https://www.googleapis.com/auth/drive']
 
 ########################################
 # FUNÇÕES DE AUTENTICAÇÃO E BUSCA NO GOOGLE DRIVE
@@ -63,18 +63,85 @@ def get_drive_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # Verifica se existe arquivo de credenciais
-            if not os.path.exists('credentials.json'):
-                st.error("Arquivo 'credentials.json' não encontrado. Por favor, configure as credenciais do Google Drive.")
+            # Tentar usar credenciais do Streamlit secrets primeiro
+            try:
+                if hasattr(st, 'secrets'):
+                    # Verificar se as credenciais estão no nível raiz dos secrets
+                    if 'client_id' in st.secrets and 'client_secret' in st.secrets:
+                        # Criar configuração de credenciais a partir dos secrets
+                        client_config = {
+                            "web": {
+                                "client_id": st.secrets.get('client_id'),
+                                "project_id": st.secrets.get('project_id'),
+                                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                                "token_uri": "https://oauth2.googleapis.com/token",
+                                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                                "client_secret": st.secrets.get('client_secret'),
+                                "redirect_uris": [
+                                    "http://localhost:8080",
+                                    "http://localhost:8080/",
+                                    "http://127.0.0.1:8080",
+                                    "http://127.0.0.1:8080/"
+                                ]
+                            }
+                        }
+                        
+                        flow = InstalledAppFlow.from_client_config(
+                            client_config, SCOPES)
+                        creds = flow.run_local_server(port=8080)
+                        
+                    elif 'google_drive' in st.secrets:
+                        google_drive_secrets = st.secrets['google_drive']
+                        
+                        # Criar configuração de credenciais a partir dos secrets
+                        client_config = {
+                            "web": {
+                                "client_id": google_drive_secrets.get('client_id'),
+                                "project_id": google_drive_secrets.get('project_id'),
+                                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                                "token_uri": "https://oauth2.googleapis.com/token",
+                                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                                "client_secret": google_drive_secrets.get('client_secret'),
+                                "redirect_uris": [
+                                    "http://localhost:8080",
+                                    "http://localhost:8080/",
+                                    "http://127.0.0.1:8080",
+                                    "http://127.0.0.1:8080/"
+                                ]
+                            }
+                        }
+                        
+                        flow = InstalledAppFlow.from_client_config(
+                            client_config, SCOPES)
+                        creds = flow.run_local_server(port=8080)
+                    
+                    else:
+                        st.error("Credenciais do Google Drive não encontradas nos secrets do Streamlit.")
+                        st.info("Configure as credenciais no arquivo .streamlit/secrets.toml ou no painel do Streamlit Cloud.")
+                        return None
+                        
+                elif os.path.exists('credentials.json'):
+                    # Usar arquivo de credenciais local (apenas para desenvolvimento)
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        'credentials.json', SCOPES)
+                    creds = flow.run_local_server(port=8080)
+                else:
+                    st.error("Credenciais do Google Drive não encontradas.")
+                    st.info("Para desenvolvimento local: crie um arquivo credentials.json")
+                    st.info("Para produção: configure as credenciais no Streamlit Cloud")
+                    return None
+                    
+            except Exception as e:
+                st.error(f"Erro na autenticação do Google Drive: {str(e)}")
+                logger.error(f"Erro na autenticação: {str(e)}")
                 return None
-            
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
         
-        # Salva as credenciais para próxima execução
-        with open('drive_token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
+        # Salva as credenciais para próxima execução (apenas localmente)
+        try:
+            with open('drive_token.pickle', 'wb') as token:
+                pickle.dump(creds, token)
+        except Exception as e:
+            logger.warning(f"Não foi possível salvar token localmente: {str(e)}")
     
     try:
         service = build('drive', 'v3', credentials=creds)
