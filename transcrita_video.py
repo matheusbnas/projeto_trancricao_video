@@ -74,6 +74,8 @@ def check_password():
     return True
 
 # Função para configurar o slidebar
+
+
 def sidebar():
     with st.sidebar:
         st.image("images/escola_nomade.jpg", width=200)
@@ -114,6 +116,7 @@ def sidebar():
 
     return model, max_tokens, temperature
 
+
 @st.cache_data
 def transcreve_audio_chunk(chunk_path, prompt=""):
     client = get_openai_client()
@@ -135,6 +138,7 @@ def transcreve_audio_chunk(chunk_path, prompt=""):
 #     model = load_model("base")
 #     result = transcribe(model, video_path, task="transcribe", language="pt")
 #     return result.text
+
 
 @st.cache_data
 def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
@@ -432,7 +436,7 @@ def generate_summarized_srt_from_full(srt_content, client, model):
                 O título deve ser curto e direto, seguido de dois pontos.
                 A explicação deve ser uma única frase clara e informativa.
                 Cada resumo deve ter exatamente uma linha com o título e a explicação.
-                
+
                 Exemplo exato do formato:
                 Curso Intensivo sobre Nietzsche: O curso foca em uma das obras mais significativas de Nietzsche, considerada por alguns como uma das maiores contribuições da humanidade."""},
                 {"role": "user",
@@ -465,7 +469,40 @@ def generate_summarized_srt_from_full(srt_content, client, model):
     return srt_output, text_only_output
 
 
-def process_transcription(srt_content, model, max_tokens, temperature, video_path_or_filename, duration_seconds=None):
+def process_single_video(drive_service, video_id, video_name, model, max_tokens, temperature):
+    """
+    Processa um vídeo individual do Google Drive
+    """
+    try:
+        # Download do vídeo
+        temp_video_path = download_video_from_drive(
+            drive_service, video_id, video_name)
+
+        if temp_video_path:
+            # Processar transcrição
+            srt_content = process_video(temp_video_path)
+            if srt_content:
+                st.success("✅ Transcrição concluída!")
+                # Processar e salvar no Drive
+                process_transcription(srt_content, model, max_tokens, temperature,
+                                      video_name, None, drive_service, video_id)
+            else:
+                st.error("❌ Não foi possível realizar a transcrição.")
+
+            # Limpar arquivo temporário
+            try:
+                os.remove(temp_video_path)
+            except:
+                pass
+        else:
+            st.error("❌ Erro ao fazer download do vídeo.")
+
+    except Exception as e:
+        st.error(f"❌ Erro durante a transcrição: {str(e)}")
+        logger.exception("Erro durante a transcrição do vídeo do Drive")
+
+
+def process_transcription(srt_content, model, max_tokens, temperature, video_path_or_filename, duration_seconds=None, drive_service=None, video_file_id=None):
     client = get_openai_client()
     if not client:
         return
@@ -563,6 +600,39 @@ def process_transcription(srt_content, model, max_tokens, temperature, video_pat
             st.markdown(create_download_link(transcript_srt_file_path, "Baixar Transcrição Completa (SRT)",
                         f"{original_filename}_transcricao_completa.srt"), unsafe_allow_html=True)
 
+    # Salvar no Google Drive se especificado
+    if drive_service and video_file_id:
+        st.info("Salvando arquivos no Google Drive...")
+        try:
+            # Salvar arquivos na mesma pasta do vídeo original
+            uploaded_files = save_transcription_to_drive(
+                drive_service,
+                video_file_id,
+                srt_content,
+                text_only_summary,
+                original_filename
+            )
+
+            if uploaded_files:
+                st.success("✅ Arquivos salvos no Google Drive com sucesso!")
+                st.subheader("📁 Arquivos salvos no Google Drive")
+
+                for file_info in uploaded_files:
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.write(
+                            f"**{file_info['name']}** - {file_info['type']}")
+                    with col2:
+                        st.markdown(
+                            f"[🔗 Abrir no Drive]({file_info['link']})", unsafe_allow_html=True)
+            else:
+                st.warning(
+                    "⚠️ Não foi possível salvar os arquivos no Google Drive.")
+
+        except Exception as e:
+            st.error(f"❌ Erro ao salvar no Google Drive: {str(e)}")
+            logger.exception("Erro ao salvar arquivos no Google Drive")
+
     # Cleanup temporary files
     for file in [summarized_srt_file_path, transcript_srt_file_path]:
         try:
@@ -580,7 +650,7 @@ def page(model, max_tokens, temperature):
             str(datetime.datetime.now()).encode()).hexdigest()
 
     video_source = st.radio("Escolha a fonte do vídeo:", [
-                            "Upload Local", "YouTube", "Google Cloud Storage"])
+                            "Upload Local", "YouTube", "Google Cloud Storage", "Google Drive"])
 
     if video_source == "Upload Local":
         uploaded_video = st.file_uploader(
@@ -670,6 +740,285 @@ def page(model, max_tokens, temperature):
                     st.error(f"Erro durante a transcrição: {str(e)}")
                     logger.exception(
                         "Erro durante a transcrição do vídeo do YouTube")
+
+    elif video_source == "Google Drive":
+        st.subheader("Transcrição de Vídeos do Google Drive")
+
+        # Verificar se o serviço do Drive está disponível
+        drive_service = get_drive_service()
+
+        if not drive_service:
+            st.error(
+                "Não foi possível conectar ao Google Drive. Verifique as credenciais.")
+        else:
+            # Opções de busca
+            search_option = st.radio("Como deseja buscar os vídeos?", [
+                "Buscar por nome",
+                "Buscar em pasta específica",
+                "Listar todos os vídeos"
+            ])
+
+            if search_option == "Transcrever vídeo por URL do Drive":
+                drive_url = st.text_input(
+                    "Cole aqui o link do vídeo ou pasta do Google Drive:",
+                    placeholder="https://drive.google.com/file/d/VIDEO_ID/view ou https://drive.google.com/drive/folders/FOLDER_ID"
+                )
+
+                if drive_url:
+                    if st.button("🎬 Processar Drive"):
+                        with st.spinner("Analisando conteúdo do Google Drive..."):
+                            try:
+                                # Verificar se é URL de arquivo ou pasta
+                                if '/file/d/' in drive_url:
+                                    # É um arquivo específico
+                                    video_id = drive_url.split(
+                                        '/file/d/')[1].split('/')[0]
+
+                                    # Obter informações do vídeo
+                                    try:
+                                        video_metadata = drive_service.files().get(
+                                            fileId=video_id,
+                                            fields='id,name,size,parents'
+                                        ).execute()
+
+                                        video_name = video_metadata.get(
+                                            'name', 'video_drive')
+                                        st.info(
+                                            f"📹 Processando arquivo: {video_name}")
+
+                                        # Processar o vídeo
+                                        process_single_video(
+                                            drive_service, video_id, video_name, model, max_tokens, temperature)
+
+                                    except Exception as e:
+                                        st.error(
+                                            f"❌ Erro ao acessar o arquivo: {str(e)}")
+                                        return
+
+                                elif '/drive/folders/' in drive_url or '/folders/' in drive_url:
+                                    # É uma pasta
+                                    folder_id = None
+                                    if '/drive/folders/' in drive_url:
+                                        folder_id = drive_url.split(
+                                            '/drive/folders/')[1].split('/')[0]
+                                    elif '/folders/' in drive_url:
+                                        folder_id = drive_url.split(
+                                            '/folders/')[1].split('/')[0]
+
+                                    if not folder_id:
+                                        st.error(
+                                            "❌ Não foi possível extrair o ID da pasta da URL fornecida.")
+                                        return
+
+                                    # Buscar vídeos na pasta
+                                    videos = search_videos_in_drive(
+                                        drive_service, folder_id=folder_id)
+
+                                    if videos:
+                                        st.success(
+                                            f"✅ Encontrados {len(videos)} vídeo(s) na pasta!")
+                                        st.subheader(
+                                            "📹 Vídeos disponíveis para transcrição:")
+
+                                        for i, video in enumerate(videos):
+                                            col1, col2, col3 = st.columns(
+                                                [3, 1, 1])
+                                            with col1:
+                                                st.write(
+                                                    f"**{video['name']}**")
+                                                if 'size' in video:
+                                                    size_mb = int(
+                                                        video['size']) / (1024 * 1024)
+                                                    st.write(
+                                                        f"Tamanho: {size_mb:.2f} MB")
+                                            with col2:
+                                                if st.button(f"🎬 Transcrever", key=f"transcribe_folder_{video['id']}"):
+                                                    with st.spinner(f"Processando {video['name']}..."):
+                                                        process_single_video(
+                                                            drive_service, video['id'], video['name'], model, max_tokens, temperature)
+                                            with col3:
+                                                st.write("")
+                                    else:
+                                        st.warning(
+                                            "⚠️ Nenhum vídeo encontrado nesta pasta.")
+
+                                else:
+                                    st.error(
+                                        "❌ URL não reconhecida. Use uma URL de arquivo ou pasta do Google Drive.")
+                                    st.info("💡 Formatos aceitos:")
+                                    st.info(
+                                        "• Arquivo: https://drive.google.com/file/d/VIDEO_ID/view")
+                                    st.info(
+                                        "• Pasta: https://drive.google.com/drive/folders/FOLDER_ID")
+
+                            except Exception as e:
+                                st.error(
+                                    f"❌ Erro durante o processamento: {str(e)}")
+                                logger.exception(
+                                    "Erro durante o processamento do Drive")
+
+            elif search_option == "Buscar por nome":
+                search_query = st.text_input(
+                    "Digite o nome do vídeo para buscar:")
+                if search_query:
+                    videos = search_videos_in_drive(
+                        drive_service, query=search_query)
+
+                    if videos:
+                        st.write(f"Encontrados {len(videos)} vídeo(s):")
+                        for video in videos:
+                            col1, col2, col3 = st.columns([3, 1, 1])
+                            with col1:
+                                st.write(f"**{video['name']}**")
+                                if 'size' in video:
+                                    size_mb = int(
+                                        video['size']) / (1024 * 1024)
+                                    st.write(f"Tamanho: {size_mb:.2f} MB")
+                            with col2:
+                                if st.button(f"Transcrever", key=f"transcribe_{video['id']}"):
+                                    with st.spinner(f"Fazendo download e transcrevendo {video['name']}..."):
+                                        try:
+                                            # Download do vídeo
+                                            temp_video_path = download_video_from_drive(
+                                                drive_service, video['id'], video['name'])
+                                            if temp_video_path:
+                                                # Processar transcrição
+                                                srt_content = process_video(
+                                                    temp_video_path)
+                                                if srt_content:
+                                                    st.success(
+                                                        "Transcrição concluída!")
+                                                    process_transcription(
+                                                        srt_content, model, max_tokens, temperature, video['name'], None, drive_service, video['id'])
+                                                else:
+                                                    st.error(
+                                                        "Não foi possível realizar a transcrição.")
+
+                                                # Limpar arquivo temporário
+                                                try:
+                                                    os.remove(temp_video_path)
+                                                except:
+                                                    pass
+                                            else:
+                                                st.error(
+                                                    "Erro ao fazer download do vídeo.")
+                                        except Exception as e:
+                                            st.error(
+                                                f"Erro durante a transcrição: {str(e)}")
+                                            logger.exception(
+                                                "Erro durante a transcrição do vídeo do Drive")
+                            with col3:
+                                st.write("")
+
+            elif search_option == "Buscar em pasta específica":
+                folder_url = st.text_input(
+                    "Digite a URL da pasta do Google Drive:")
+                if folder_url:
+                    folder_id = get_folder_id_from_url(folder_url)
+                    if folder_id:
+                        videos = search_videos_in_drive(
+                            drive_service, folder_id=folder_id)
+
+                        if videos:
+                            st.write(
+                                f"Encontrados {len(videos)} vídeo(s) na pasta:")
+                            for video in videos:
+                                col1, col2, col3 = st.columns([3, 1, 1])
+                                with col1:
+                                    st.write(f"**{video['name']}**")
+                                    if 'size' in video:
+                                        size_mb = int(
+                                            video['size']) / (1024 * 1024)
+                                        st.write(f"Tamanho: {size_mb:.2f} MB")
+                                with col2:
+                                    if st.button(f"Transcrever", key=f"transcribe_{video['id']}"):
+                                        with st.spinner(f"Fazendo download e transcrevendo {video['name']}..."):
+                                            try:
+                                                # Download do vídeo
+                                                temp_video_path = download_video_from_drive(
+                                                    drive_service, video['id'], video['name'])
+                                                if temp_video_path:
+                                                    # Processar transcrição
+                                                    srt_content = process_video(
+                                                        temp_video_path)
+                                                    if srt_content:
+                                                        st.success(
+                                                            "Transcrição concluída!")
+                                                        process_transcription(
+                                                            srt_content, model, max_tokens, temperature, video['name'], None, drive_service, video['id'])
+                                                    else:
+                                                        st.error(
+                                                            "Não foi possível realizar a transcrição.")
+
+                                                    # Limpar arquivo temporário
+                                                    try:
+                                                        os.remove(
+                                                            temp_video_path)
+                                                    except:
+                                                        pass
+                                                else:
+                                                    st.error(
+                                                        "Erro ao fazer download do vídeo.")
+                                            except Exception as e:
+                                                st.error(
+                                                    f"Erro durante a transcrição: {str(e)}")
+                                                logger.exception(
+                                                    "Erro durante a transcrição do vídeo do Drive")
+                                with col3:
+                                    st.write("")
+                    else:
+                        st.error(
+                            "Não foi possível extrair o ID da pasta da URL fornecida.")
+
+            elif search_option == "Listar todos os vídeos":
+                if st.button("Listar todos os vídeos"):
+                    videos = search_videos_in_drive(drive_service)
+
+                    if videos:
+                        st.write(f"Encontrados {len(videos)} vídeo(s):")
+                        for video in videos:
+                            col1, col2, col3 = st.columns([3, 1, 1])
+                            with col1:
+                                st.write(f"**{video['name']}**")
+                                if 'size' in video:
+                                    size_mb = int(
+                                        video['size']) / (1024 * 1024)
+                                    st.write(f"Tamanho: {size_mb:.2f} MB")
+                            with col2:
+                                if st.button(f"Transcrever", key=f"transcribe_{video['id']}"):
+                                    with st.spinner(f"Fazendo download e transcrevendo {video['name']}..."):
+                                        try:
+                                            # Download do vídeo
+                                            temp_video_path = download_video_from_drive(
+                                                drive_service, video['id'], video['name'])
+                                            if temp_video_path:
+                                                # Processar transcrição
+                                                srt_content = process_video(
+                                                    temp_video_path)
+                                                if srt_content:
+                                                    st.success(
+                                                        "Transcrição concluída!")
+                                                    process_transcription(
+                                                        srt_content, model, max_tokens, temperature, video['name'], None, drive_service, video['id'])
+                                                else:
+                                                    st.error(
+                                                        "Não foi possível realizar a transcrição.")
+
+                                                # Limpar arquivo temporário
+                                                try:
+                                                    os.remove(temp_video_path)
+                                                except:
+                                                    pass
+                                            else:
+                                                st.error(
+                                                    "Erro ao fazer download do vídeo.")
+                                        except Exception as e:
+                                            st.error(
+                                                f"Erro durante a transcrição: {str(e)}")
+                                            logger.exception(
+                                                "Erro durante a transcrição do vídeo do Drive")
+                            with col3:
+                                st.write("")
 
     # Adicionar JavaScript para controle do vídeo
     st.markdown("""

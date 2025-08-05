@@ -1,16 +1,68 @@
-#variavel de ambiente
+# Variáveis de ambiente
 .env
 .venv
 
-#Arquivos seguranca
+# Arquivos de segurança e credenciais
 .streamlit/
+credentials.json
+drive_token.pickle
+token.pickle
 
-#arquivo temporarios
-temp
-__pycache__
+# Arquivos temporários
+temp/
+tmp/
+*.tmp
+*.temp
+*.log
 
-#arquivos de tests
-tests
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-#arquivos exe
+# Ambientes virtuais
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Arquivos de mídia temporários
+*.mp4
+*.mp3
+*.wav
+*.avi
+*.mov
+*.mkv
+
+# Arquivos de tests
+tests/
+
+# Arquivos executáveis
 ffmpeg.exe
