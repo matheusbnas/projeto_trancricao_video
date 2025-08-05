@@ -2,11 +2,14 @@ import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv, find_dotenv
 import os
-import vimeo
 import re
 import logging
+import tempfile
+import requests
+import hashlib
+import datetime
+from moviepy.editor import VideoFileClip
 from utils import *
-import math
 
 # Load environment variables
 _ = load_dotenv(find_dotenv())
@@ -15,19 +18,9 @@ _ = load_dotenv(find_dotenv())
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configurações do Vimeo
-VIMEO_ACCESS_TOKEN = st.secrets["VIMEO_ACCESS_TOKEN"]
-VIMEO_CLIENT_ID = st.secrets["VIMEO_CLIENT_ID"]
-VIMEO_CLIENT_SECRET = st.secrets["VIMEO_CLIENT_SECRET"]
 
-# Inicializar cliente Vimeo
-vimeo_client = vimeo.VimeoClient(
-    token=VIMEO_ACCESS_TOKEN,
-    key=VIMEO_CLIENT_ID,
-    secret=VIMEO_CLIENT_SECRET
-)
-
-st.set_page_config(page_title="Resumo de Transcrição de Vídeo", page_icon="🎥", layout="wide")
+st.set_page_config(page_title="Resumo de Transcrição de Vídeo",
+                   page_icon="🎥", layout="wide")
 
 
 def get_openai_client():
@@ -36,9 +29,11 @@ def get_openai_client():
         if api_key:
             st.session_state.openai_client = OpenAI(api_key=api_key)
         else:
-            st.error("Chave da API OpenAI não encontrada. Por favor, faça login novamente.")
+            st.error(
+                "Chave da API OpenAI não encontrada. Por favor, faça login novamente.")
             return None
     return st.session_state.openai_client
+
 
 def validate_openai_api_key(api_key):
     try:
@@ -48,6 +43,7 @@ def validate_openai_api_key(api_key):
     except Exception as e:
         st.error(f"Erro ao validar a chave API do OpenAI: {str(e)}")
         return False
+
 
 def check_password():
     if "authentication_status" not in st.session_state:
@@ -112,8 +108,9 @@ def sidebar():
             st.session_state["user_role"] = None
             st.rerun()
 
-        st.markdown("[Matheus Bernardes](https://www.linkedin.com/in/matheusbnas)")
-        st.markdown("Desenvolvido por [Matech 3D](https://matech3d.com.br/)")
+        st.markdown(
+            "[Matheus Bernardes](https://www.linkedin.com/in/matheusbnas)")
+        st.markdown("Desenvolvido por [Matech AI](https://matechai.com/)")
 
     return model, max_tokens, temperature
 
@@ -148,8 +145,9 @@ def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
     try:
         # Dividir a transcrição em partes menores se necessário
         max_chars = 15000  # Ajuste este valor conforme necessário
-        transcricao_parts = [transcricao[i:i+max_chars] for i in range(0, len(transcricao), max_chars)]
-        
+        transcricao_parts = [transcricao[i:i+max_chars]
+                             for i in range(0, len(transcricao), max_chars)]
+
         resumo_completo = ""
         for part in transcricao_parts:
             resposta = client.chat.completions.create(
@@ -172,196 +170,214 @@ def gera_resumo_tldv(transcricao, model, max_tokens, temperature):
                 temperature=temperature
             )
             resumo_completo += resposta.choices[0].message.content + "\n\n"
-        
+
         return resumo_completo.strip()
     except Exception as e:
         st.error(f"Erro ao gerar resumo: {str(e)}")
         return None
 
-def process_video(video_path_or_url):
-    temp_audio_file = None
+
+def process_audio_for_transcription(audio_path, duration_seconds=None):
+    """
+    Processa um arquivo de áudio para transcrição
+    """
     try:
-        # Criar um arquivo temporário para o áudio
-        temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-        temp_audio_file.close()
-        audio_path = temp_audio_file.name
-        
-        logger.info(f"Iniciando processamento do vídeo: {video_path_or_url}")
-        logger.info(f"Arquivo de áudio temporário criado: {audio_path}")
-        
-        # Extrair áudio do vídeo
-        with VideoFileClip(video_path_or_url) as video:
-            audio = video.audio
-            audio.write_audiofile(audio_path)
-        
-        logger.info(f"Áudio extraído e salvo em: {audio_path}")
-        
-        # Verificar se o arquivo de áudio foi criado corretamente
+        logger.info(f"Iniciando processamento do áudio: {audio_path}")
+
+        # Verificar se o arquivo de áudio existe
         if not os.path.exists(audio_path):
-            raise FileNotFoundError(f"O arquivo de áudio não foi criado: {audio_path}")
-        
+            raise FileNotFoundError(
+                f"O arquivo de áudio não foi encontrado: {audio_path}")
+
+        # Verificar se o arquivo tem tamanho > 0
+        if os.path.getsize(audio_path) == 0:
+            raise ValueError("O arquivo de áudio está vazio")
+
         # Dividir o áudio em chunks
-        audio_chunks = split_audio(audio_path, chunk_duration=1200)  # 20 minutos por chunk
+        audio_chunks = split_audio(
+            audio_path, chunk_duration=1200)  # 20 minutos por chunk
         full_transcript = ""
-        
-        logger.info(f"Iniciando transcrição de {len(audio_chunks)} chunks de áudio")
-        
+
+        logger.info(
+            f"Iniciando transcrição de {len(audio_chunks)} chunks de áudio")
+
         # Processar cada chunk de áudio
         for i, (chunk_path, start_time) in enumerate(audio_chunks):
             logger.info(f"Processando chunk {i+1}/{len(audio_chunks)}")
+
+            # Verificar se o chunk existe e tem tamanho > 0
+            if not os.path.exists(chunk_path) or os.path.getsize(chunk_path) == 0:
+                logger.warning(
+                    f"Chunk {i+1} não existe ou está vazio, pulando...")
+                continue
+
             chunk_size = os.path.getsize(chunk_path)
-            logger.info(f"Tamanho do chunk: {chunk_size / (1024 * 1024):.2f} MB")
-            
+            logger.info(
+                f"Tamanho do chunk: {chunk_size / (1024 * 1024):.2f} MB")
+
             chunk_transcript = transcreve_audio_chunk(chunk_path)
-            adjusted_transcript = ajusta_tempo_srt(chunk_transcript, start_time)
-            full_transcript += adjusted_transcript + "\n\n"
-            os.remove(chunk_path)  # Remove o chunk de áudio após a transcrição
-        
+            if chunk_transcript:
+                adjusted_transcript = ajusta_tempo_srt(
+                    chunk_transcript, start_time)
+                full_transcript += adjusted_transcript + "\n\n"
+
+            # Remove o chunk de áudio após a transcrição
+            try:
+                os.remove(chunk_path)
+            except Exception as e:
+                logger.warning(
+                    f"Não foi possível remover o chunk {chunk_path}: {str(e)}")
+
         logger.info("Transcrição completa")
         return full_transcript
-    
+
+    except Exception as e:
+        logger.exception(f"Erro ao processar o áudio: {str(e)}")
+        raise
+
+
+def process_video(video_path_or_url):
+    """
+    Processa um arquivo de vídeo, extraindo o áudio e retornando a transcrição
+    """
+    temp_audio_file = None
+    try:
+        # Criar um arquivo temporário para o áudio
+        temp_audio_file = tempfile.NamedTemporaryFile(
+            delete=False, suffix='.mp3')
+        temp_audio_file.close()
+        audio_path = temp_audio_file.name
+
+        logger.info(f"Iniciando processamento do vídeo: {video_path_or_url}")
+        logger.info(f"Arquivo de áudio temporário criado: {audio_path}")
+
+        # Extrair áudio do vídeo com tratamento de erro mais robusto
+        try:
+            with VideoFileClip(video_path_or_url) as video:
+                if video.audio is None:
+                    raise ValueError("O vídeo não possui faixa de áudio")
+
+                audio = video.audio
+                # Configurações mais robustas para write_audiofile
+                audio.write_audiofile(
+                    audio_path,
+                    verbose=False,
+                    logger=None,
+                    bitrate="64k"
+                )
+        except Exception as e:
+            logger.error(f"Erro ao extrair áudio: {str(e)}")
+            raise
+
+        logger.info(f"Áudio extraído e salvo em: {audio_path}")
+
+        # Verificar se o arquivo de áudio foi criado corretamente
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(
+                f"O arquivo de áudio não foi criado: {audio_path}")
+
+        # Verificar se o arquivo tem tamanho > 0
+        if os.path.getsize(audio_path) == 0:
+            raise ValueError("O arquivo de áudio foi criado mas está vazio")
+
+        # Processar o áudio extraído
+        return process_audio_for_transcription(audio_path)
+
     except Exception as e:
         logger.exception(f"Erro ao processar o vídeo: {str(e)}")
         raise
-    
+
     finally:
-        logger.info("Iniciando limpeza de recursos")
-        # Limpeza dos arquivos temporários
+        # Limpar arquivo temporário
         if temp_audio_file and os.path.exists(temp_audio_file.name):
             try:
                 os.remove(temp_audio_file.name)
-                logger.info(f"Arquivo de áudio temporário removido: {temp_audio_file.name}")
             except Exception as e:
-                logger.warning(f"Não foi possível remover o arquivo de áudio temporário: {str(e)}")
+                logger.warning(
+                    f"Não foi possível remover o arquivo temporário {temp_audio_file.name}: {str(e)}")
 
 ########################################
-#FUNÇÕES DE TRANSCRIÇÃO DE VIDEO DO VIMEO
+# FUNÇÕES DE TRANSCRIÇÃO DE VIDEO DO YOUTUBE
 ########################################
-def transcribe_vimeo_video(video_link):
-    client = get_openai_client()
-    if not client:
-        return None
 
+
+def process_youtube_video_simple(youtube_url):
+    """
+    Função simplificada para processar vídeos do YouTube usando yt-dlp
+    """
     try:
-        # Baixar o vídeo em um arquivo temporário
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
-            response = requests.get(video_link, stream=True)
-            response.raise_for_status()
-            for chunk in response.iter_content(chunk_size=8192):
-                temp_file.write(chunk)
-            temp_file_path = temp_file.name
+        import yt_dlp
 
-        # Transcrever o vídeo
-        with open(temp_file_path, 'rb') as video_file:
-            transcription = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=video_file,
-                response_format="srt",
-                language="pt"
-            )
+        # Configurações do yt-dlp mais robustas
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': '%(title)s.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+        }
 
-        # Remover o arquivo temporário
-        os.remove(temp_file_path)
+        # Baixar o áudio do vídeo
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ydl_opts['outtmpl'] = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-        return transcription
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Primeiro, extrair informações sem baixar
+                try:
+                    info = ydl.extract_info(youtube_url, download=False)
+                    video_title = info.get('title', 'video_youtube')
+                    video_duration = info.get('duration', 0)
+                except Exception as e:
+                    logger.warning(
+                        f"Erro ao extrair informações do vídeo: {str(e)}")
+                    video_title = 'video_youtube'
+                    video_duration = 0
+
+                # Agora baixar o áudio
+                try:
+                    info = ydl.extract_info(youtube_url, download=True)
+                except Exception as e:
+                    logger.error(f"Erro ao baixar vídeo: {str(e)}")
+                    raise Exception(
+                        f"Não foi possível baixar o vídeo: {str(e)}")
+
+                # Encontrar o arquivo de áudio baixado
+                audio_files = [f for f in os.listdir(
+                    temp_dir) if f.endswith('.mp3')]
+                if not audio_files:
+                    raise Exception("Não foi possível baixar o áudio do vídeo")
+
+                audio_path = os.path.join(temp_dir, audio_files[0])
+
+                # Verificar se o arquivo tem tamanho > 0
+                if os.path.getsize(audio_path) == 0:
+                    raise Exception(
+                        "O arquivo de áudio foi baixado mas está vazio")
+
+                # Processar o áudio usando a função específica para áudio
+                srt_content = process_audio_for_transcription(audio_path)
+
+                # Retornar tanto o conteúdo SRT quanto o título do vídeo e duração
+                return srt_content, video_title, video_duration
+
+    except ImportError:
+        st.error("Biblioteca yt-dlp não encontrada. Instale com: pip install yt-dlp")
+        return None, None
     except Exception as e:
-        logger.exception(f"Erro ao transcrever vídeo do Vimeo: {str(e)}")
-        st.error(f"Erro ao transcrever vídeo: {str(e)}")
-        return None
-
-def process_vimeo_video(vimeo_url, model, max_tokens, temperature):
-    try:
-        with st.spinner("Obtendo informações do vídeo do Vimeo..."):
-            video_link = get_vimeo_video_link(vimeo_url, vimeo_client)
-            if not video_link:
-                st.error("Não foi possível obter o link do vídeo do Vimeo.")
-                return
-
-        with st.spinner("Transcrevendo vídeo..."):
-            srt_content = transcribe_vimeo_video(video_link)
-            if not srt_content:
-                st.error("Não foi possível gerar a transcrição do vídeo do Vimeo.")
-                return
-
-        st.success("Transcrição automática concluída!")
-        process_transcription(srt_content, model, max_tokens, temperature, vimeo_url)
-
-    except Exception as e:
-        logger.exception(f"Ocorreu um erro ao processar o vídeo do Vimeo: {str(e)}")
-        st.error(f"Ocorreu um erro ao processar o vídeo do Vimeo: {str(e)}")
+        logger.exception(f"Erro ao processar vídeo do YouTube: {str(e)}")
+        st.error(f"Erro ao processar vídeo do YouTube: {str(e)}")
+        return None, None
 
 ########################################
-#FUNÇÕES DE TRANSCRIÇÃO DE VIDEO DO YOUTUBE
+# FUNÇÕES DE PROCESSO DE TRANSCRIÇÃO EM SRT E PDF
 ########################################
-def extract_youtube_video_id(url):
-    # Função para extrair o ID do vídeo do YouTube da URL
-    pattern = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?(.+)'
-    match = re.search(pattern, url)
-    return match.group(1) if match else None
 
-def process_youtube_video(video_id, model, max_tokens, temperature):
-    try:
-        youtube = get_authenticated_service()
-        
-        with st.spinner("Obtendo informações do vídeo do YouTube..."):
-            video_details = get_video_details(youtube, video_id)
-            if not video_details:
-                st.error("Não foi possível obter informações do vídeo do YouTube.")
-                return
 
-            video_url = get_video_download_url(youtube, video_id)
-            if not video_url:
-                st.error("Não foi possível obter o link do vídeo do YouTube.")
-                return
-
-        with st.spinner("Transcrevendo vídeo..."):
-            srt_content = transcribe_youtube_video(video_url)
-            if not srt_content:
-                st.error("Não foi possível gerar a transcrição do vídeo do YouTube.")
-                return
-
-        st.success("Transcrição automática concluída!")
-        process_transcription(srt_content, model, max_tokens, temperature, video_url)
-
-    except Exception as e:
-        logger.exception(f"Ocorreu um erro ao processar o vídeo do YouTube: {str(e)}")
-        st.error(f"Ocorreu um erro ao processar o vídeo do YouTube: {str(e)}")
-
-def transcribe_youtube_video(video_url):
-    client = get_openai_client()
-    if not client:
-        return None
-
-    try:
-        # Baixar o vídeo em um arquivo temporário
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
-            response = requests.get(video_url, stream=True)
-            response.raise_for_status()
-            for chunk in response.iter_content(chunk_size=8192):
-                temp_file.write(chunk)
-            temp_file_path = temp_file.name
-
-        # Transcrever o vídeo
-        with open(temp_file_path, 'rb') as video_file:
-            transcription = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=video_file,
-                response_format="srt",
-                language="pt"
-            )
-
-        # Remover o arquivo temporário
-        os.remove(temp_file_path)
-
-        return transcription
-    except Exception as e:
-        logger.exception(f"Erro ao transcrever vídeo do YouTube: {str(e)}")
-        st.error(f"Erro ao transcrever vídeo: {str(e)}")
-        return None
-    
-########################################
-#FUNÇÕES DE PROCESSO DE TRANSCRIÇÃO EM SRT E PDF
-########################################  
 def generate_summarized_srt_from_full(srt_content, client, model):
     """
     Generate a summarized SRT that maintains timing but provides concise summaries
@@ -370,7 +386,7 @@ def generate_summarized_srt_from_full(srt_content, client, model):
     segments = []
     current_segment = {}
     current_text = []
-    
+
     # Parse original SRT content
     for line in srt_content.strip().split('\n'):
         line = line.strip()
@@ -386,29 +402,29 @@ def generate_summarized_srt_from_full(srt_content, client, model):
             current_segment['end_time'] = end.strip()
         elif line:  # Content
             current_text.append(line)
-    
+
     # Add last segment if exists
     if current_segment and current_text:
         current_segment['text'] = ' '.join(current_text)
         segments.append(current_segment)
-    
+
     # Group segments into meaningful chunks
     chunk_size = 3  # Adjust based on your needs
-    chunks = [segments[i:i + chunk_size] 
-             for i in range(0, len(segments), chunk_size)]
-    
+    chunks = [segments[i:i + chunk_size]
+              for i in range(0, len(segments), chunk_size)]
+
     # Generate summaries for each chunk
     summarized_segments = []
     for chunk in chunks:
         # Combine text from segments in chunk
         chunk_text = " ".join(seg['text'] for seg in chunk)
-        
+
         # Generate summary using OpenAI with specific format prompt
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", 
-                "content": """Você é um especialista em criar resumos estruturados em português do Brasil.
+                {"role": "system",
+                 "content": """Você é um especialista em criar resumos estruturados em português do Brasil.
                 Para cada segmento, forneça um resumo EXATAMENTE neste formato:
 
                 Título do tópico: Explicação concisa e direta do conteúdo.
@@ -419,68 +435,96 @@ def generate_summarized_srt_from_full(srt_content, client, model):
                 
                 Exemplo exato do formato:
                 Curso Intensivo sobre Nietzsche: O curso foca em uma das obras mais significativas de Nietzsche, considerada por alguns como uma das maiores contribuições da humanidade."""},
-                {"role": "user", 
-                "content": f"Resuma este segmento no formato especificado: {chunk_text}"}
+                {"role": "user",
+                 "content": f"Resuma este segmento no formato especificado: {chunk_text}"}
             ],
             max_tokens=150,
             temperature=0.4
         )
-        
+
         summary = response.choices[0].message.content.strip()
-        
+
         # Create new segment with summary
         summarized_segments.append({
             'start_time': chunk[0]['start_time'],
             'end_time': chunk[-1]['end_time'],
             'text': summary
         })
-    
+
     # Convert summarized segments back to SRT format
     srt_output = ""
     for i, segment in enumerate(summarized_segments, 1):
         srt_output += f"{i}\n"
         srt_output += f"{segment['start_time']} --> {segment['end_time']}\n"
         srt_output += f"{segment['text']}\n\n"
-    
+
     # Para a versão sem timestamps, criar uma versão separada com linhas em branco entre os segmentos
-    text_only_output = "\n\n".join(segment['text'] for segment in summarized_segments)
-    
+    text_only_output = "\n\n".join(
+        segment['text'] for segment in summarized_segments)
+
     return srt_output, text_only_output
 
-def process_transcription(srt_content, model, max_tokens, temperature, video_path):
+
+def process_transcription(srt_content, model, max_tokens, temperature, video_path_or_filename, duration_seconds=None):
     client = get_openai_client()
     if not client:
         return
 
+    # Extrair o nome do arquivo original
+    # Se for um caminho completo, extrair o nome; se for apenas o nome, usar diretamente
+    if '/' in video_path_or_filename or '\\' in video_path_or_filename or video_path_or_filename.startswith(('http://', 'https://')):
+        original_filename = extract_filename_from_path(video_path_or_filename)
+    else:
+        # Se for apenas o nome do arquivo (caso do upload local)
+        original_filename = os.path.splitext(video_path_or_filename)[0]
+        # Limpar caracteres especiais
+        original_filename = re.sub(r'[<>:"/\\|?*]', '_', original_filename)
+
     # Status placeholder para mensagens de progresso
     status_placeholder = st.empty()
-    status_placeholder.success("Transcrição automática concluída! Gerando documentos...")
+    status_placeholder.success(
+        "Transcrição automática concluída! Gerando documentos...")
 
     # Generate summarized SRT and text-only version
     status_placeholder.info("Gerando resumo da transcrição...")
-    summarized_srt, text_only_summary = generate_summarized_srt_from_full(srt_content, client, model)
-    
-    # Get video duration
-    with VideoFileClip(video_path) as video:
-        duracao_total_segundos = int(video.duration)
+    summarized_srt, text_only_summary = generate_summarized_srt_from_full(
+        srt_content, client, model)
 
-    # Create PDFs and SRTs
+    # Get video duration (only if we have a valid video path and duration wasn't provided)
+    duracao_total_segundos = duration_seconds or 0
+    if not duration_seconds and ('/' in video_path_or_filename or '\\' in video_path_or_filename or video_path_or_filename.startswith(('http://', 'https://'))):
+        try:
+            with VideoFileClip(video_path_or_filename) as video:
+                duracao_total_segundos = int(video.duration)
+        except Exception as e:
+            logger.warning(
+                f"Não foi possível obter a duração do vídeo: {str(e)}")
+
+    # Create PDFs and SRTs with original filename
     status_placeholder.info("Gerando arquivos PDF e SRT...")
-    transcript_pdf = create_pdf(processa_srt_sem_timestamp(srt_content), "transcricao_completa.pdf")
-    summarized_pdf = create_pdf(text_only_summary, "transcricao_resumida.pdf")
-    
-    # Save SRT files
-    summarized_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt', encoding='utf-8')
-    summarized_srt_file.write(summarized_srt)
-    summarized_srt_file.close()
-    
-    transcript_srt_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.srt', encoding='utf-8')
-    transcript_srt_file.write(srt_content)
-    transcript_srt_file.close()
+    transcript_pdf = create_pdf(processa_srt_sem_timestamp(
+        srt_content), f"{original_filename}_transcricao_completa.pdf")
+    summarized_pdf = create_pdf(
+        text_only_summary, f"{original_filename}_transcricao_resumida.pdf")
+
+    # Save SRT files with original filename
+    summarized_srt_filename = f"{original_filename}_transcricao_resumida.srt"
+    transcript_srt_filename = f"{original_filename}_transcricao_completa.srt"
+
+    # Create SRT files in temp directory with proper names
+    temp_dir = tempfile.gettempdir()
+    summarized_srt_file_path = os.path.join(temp_dir, summarized_srt_filename)
+    transcript_srt_file_path = os.path.join(temp_dir, transcript_srt_filename)
+
+    with open(summarized_srt_file_path, 'w', encoding='utf-8') as f:
+        f.write(summarized_srt)
+
+    with open(transcript_srt_file_path, 'w', encoding='utf-8') as f:
+        f.write(srt_content)
 
     # Remover mensagem de status
     status_placeholder.empty()
-    
+
     # Mostrar mensagem final de sucesso
     st.success("Processamento completo! Todos os arquivos foram gerados.")
 
@@ -494,43 +538,53 @@ def process_transcription(srt_content, model, max_tokens, temperature, video_pat
         st.text_area("Transcrição Resumida", text_only_summary, height=300)
 
     with tab2:
-        st.text_area("Transcrição Completa", processa_srt(srt_content), height=300)
+        st.text_area("Transcrição Completa",
+                     processa_srt(srt_content), height=300)
 
     # Download section
     st.subheader("Download dos Arquivos")
     tab1, tab2 = st.tabs(["Transcrição Resumida", "Transcrição Completa"])
-    
+
     with tab1:
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(create_download_link_pdf(summarized_pdf, "Baixar Transcrição Resumida (PDF)", "transcricao_resumida.pdf"), unsafe_allow_html=True)
+            st.markdown(create_download_link_pdf(summarized_pdf, "Baixar Transcrição Resumida (PDF)",
+                        f"{original_filename}_transcricao_resumida.pdf"), unsafe_allow_html=True)
         with col2:
-            st.markdown(create_download_link(summarized_srt_file.name, "Baixar Transcrição Resumida (SRT)"), unsafe_allow_html=True)
-            
+            st.markdown(create_download_link(summarized_srt_file_path, "Baixar Transcrição Resumida (SRT)",
+                        f"{original_filename}_transcricao_resumida.srt"), unsafe_allow_html=True)
+
     with tab2:
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(create_download_link_pdf(transcript_pdf, "Baixar Transcrição Completa (PDF)", "transcricao_completa.pdf"), unsafe_allow_html=True)
+            st.markdown(create_download_link_pdf(transcript_pdf, "Baixar Transcrição Completa (PDF)",
+                        f"{original_filename}_transcricao_completa.pdf"), unsafe_allow_html=True)
         with col2:
-            st.markdown(create_download_link(transcript_srt_file.name, "Baixar Transcrição Completa (SRT)"), unsafe_allow_html=True)
+            st.markdown(create_download_link(transcript_srt_file_path, "Baixar Transcrição Completa (SRT)",
+                        f"{original_filename}_transcricao_completa.srt"), unsafe_allow_html=True)
 
     # Cleanup temporary files
-    for file in [summarized_srt_file.name, transcript_srt_file.name]:
+    for file in [summarized_srt_file_path, transcript_srt_file_path]:
         try:
             os.remove(file)
         except Exception as e:
-            logger.warning(f"Não foi possível remover o arquivo temporário {file}: {str(e)}")
+            logger.warning(
+                f"Não foi possível remover o arquivo temporário {file}: {str(e)}")
+
 
 def page(model, max_tokens, temperature):
     st.title("Resumo de Transcrição de Vídeo")
 
     if 'session_id' not in st.session_state:
-        st.session_state.session_id = hashlib.md5(str(datetime.datetime.now()).encode()).hexdigest()
+        st.session_state.session_id = hashlib.md5(
+            str(datetime.datetime.now()).encode()).hexdigest()
 
-    video_source = st.radio("Escolha a fonte do vídeo:", ["Upload Local", "Google Cloud Storage", "Amazon S3"])
+    video_source = st.radio("Escolha a fonte do vídeo:", [
+                            "Upload Local", "YouTube", "Google Cloud Storage"])
 
     if video_source == "Upload Local":
-        uploaded_video = st.file_uploader("Faça upload do vídeo", type=['mp4', 'avi', 'mov'])
+        uploaded_video = st.file_uploader(
+            "Faça upload do vídeo", type=['mp4', 'avi', 'mov'])
         if uploaded_video:
             file_size = uploaded_video.size
             st.write(f"Tamanho do arquivo: {file_size / (1024 * 1024):.2f} MB")
@@ -540,14 +594,19 @@ def page(model, max_tokens, temperature):
                 temp_file_path = temp_file.name
 
             if st.button("Transcrever vídeo automaticamente"):
-                st.info("Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
+                st.info(
+                    "Transcrevendo o vídeo automaticamente... Isso pode levar alguns minutos.")
                 try:
                     srt_content = process_video(temp_file_path)
                     if srt_content:
                         st.success("Transcrição automática concluída!")
-                        process_transcription(srt_content, model, max_tokens, temperature, temp_file_path)
+                        # Passar o nome original do arquivo para process_transcription
+                        original_filename = uploaded_video.name
+                        process_transcription(
+                            srt_content, model, max_tokens, temperature, original_filename, None)
                     else:
-                        st.error("Não foi possível realizar a transcrição automática.")
+                        st.error(
+                            "Não foi possível realizar a transcrição automática.")
                 except Exception as e:
                     st.error(f"Erro durante a transcrição: {str(e)}")
                     logger.exception("Erro durante a transcrição do vídeo")
@@ -556,44 +615,61 @@ def page(model, max_tokens, temperature):
                         os.remove(temp_file_path)
 
     elif video_source == "Google Cloud Storage":
-        gcs_video_url = st.text_input("Digite a URL pública do vídeo no Google Cloud Storage")
+        gcs_video_url = st.text_input(
+            "Digite a URL pública do vídeo no Google Cloud Storage")
         if gcs_video_url:
             st.write(f"URL do vídeo: {gcs_video_url}")
-            
+
             if st.button("Transcrever vídeo do GCS"):
-                st.info("Transcrevendo o vídeo do GCS... Isso pode levar alguns minutos.")
+                st.info(
+                    "Transcrevendo o vídeo do GCS... Isso pode levar alguns minutos.")
                 try:
                     with st.spinner("Realizando transcrição..."):
                         srt_content = process_video(gcs_video_url)
-                    
+
                     if srt_content:
                         st.success("Transcrição automática concluída!")
-                        process_transcription(srt_content, model, max_tokens, temperature, gcs_video_url)
+                        process_transcription(
+                            srt_content, model, max_tokens, temperature, gcs_video_url, None)
                     else:
-                        st.error("Não foi possível realizar a transcrição automática.")
+                        st.error(
+                            "Não foi possível realizar a transcrição automática.")
                 except Exception as e:
                     st.error(f"Erro durante a transcrição: {str(e)}")
                     logger.exception("Erro durante a transcrição do vídeo")
 
-    elif video_source == "Amazon S3":
-        s3_video_url = st.text_input("Digite a URL pública do vídeo no Amazon S3")
-        if s3_video_url:
-            st.write(f"URL do vídeo: {s3_video_url}")
-            
-            if st.button("Transcrever vídeo do S3"):
-                st.info("Transcrevendo o vídeo do S3... Isso pode levar alguns minutos.")
+    elif video_source == "YouTube":
+        youtube_url = st.text_input("Digite a URL do vídeo do YouTube")
+        if youtube_url:
+            st.write(f"URL do vídeo: {youtube_url}")
+
+            if st.button("Transcrever vídeo do YouTube"):
+                st.info(
+                    "Transcrevendo o vídeo do YouTube... Isso pode levar alguns minutos.")
                 try:
                     with st.spinner("Realizando transcrição..."):
-                        srt_content = process_video(s3_video_url)
-                    
+                        srt_content, video_title, video_duration = process_youtube_video_simple(
+                            youtube_url)
+
                     if srt_content:
                         st.success("Transcrição automática concluída!")
-                        process_transcription(srt_content, model, max_tokens, temperature, s3_video_url)
+                        # Usar o título do vídeo para nomear os arquivos
+                        if video_title:
+                            # Limpar o título para usar como nome de arquivo
+                            clean_title = re.sub(
+                                r'[<>:"/\\|?*]', '_', video_title)
+                            process_transcription(
+                                srt_content, model, max_tokens, temperature, clean_title, video_duration)
+                        else:
+                            process_transcription(
+                                srt_content, model, max_tokens, temperature, youtube_url, video_duration)
                     else:
-                        st.error("Não foi possível realizar a transcrição automática.")
+                        st.error(
+                            "Não foi possível realizar a transcrição automática.")
                 except Exception as e:
                     st.error(f"Erro durante a transcrição: {str(e)}")
-                    logger.exception("Erro durante a transcrição do vídeo")
+                    logger.exception(
+                        "Erro durante a transcrição do vídeo do YouTube")
 
     # Adicionar JavaScript para controle do vídeo
     st.markdown("""
@@ -608,16 +684,7 @@ def page(model, max_tokens, temperature):
     </script>
     """, unsafe_allow_html=True)
 
-# def show_youtube_terms():
-#     youtube_terms_service.main()
-    
-#     # Verificar se o checkbox foi marcado
-#     if st.session_state.get('youtube_terms_checkbox', False):
-#         st.session_state.youtube_terms_accepted = True
-#         st.success("Termos aceitos. Você pode agora usar a funcionalidade do YouTube.")
-#     else:
-#         st.session_state.youtube_terms_accepted = False
-        
+
 def main():
     if check_password():
         # Sempre renderizar a sidebar
@@ -626,14 +693,11 @@ def main():
         # Atualizar o estado da sessão com as configurações mais recentes
         st.session_state.sidebar_config = (model, max_tokens, temperature)
 
-        # Adicionar link para Termos de Serviço na sidebar
-        # if st.sidebar.button("Termos de Serviço do YouTube"):
-        #     st.switch_page("pages/youtube_terms_service.py")
-
         # Chamar a página principal com as configurações atualizadas
         page(model, max_tokens, temperature)
     else:
         st.warning("Você não tem permissão para acessar essa página.")
+
 
 if __name__ == "__main__":
     main()

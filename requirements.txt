@@ -14,3 +14,4 @@ srt
 reportlab
 PyVimeo
 pysrt
+yt-dlp

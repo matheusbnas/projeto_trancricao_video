@@ -4,20 +4,22 @@ Este projeto é uma aplicação Streamlit que permite aos usuários fazer upload
 
 ## Funcionalidades
 
-- Upload de vídeo (formatos suportados: mp4, avi, mov)
-- Upload opcional de arquivo de transcrição em formato txt
+- Upload de vídeo local (formatos suportados: mp4, avi, mov)
+- Transcrição de vídeos do YouTube via URL
+- Transcrição de vídeos do Google Cloud Storage via URL
 - Transcrição automática de vídeo usando OpenAI Whisper
-- Geração de resumo no estilo tl;dv
-- Sincronização entre resumo e vídeo
-- Download de resumo e transcrição completa em formato SRT
-- Autenticação via Google OAuth
+- Geração de resumo estruturado no estilo tl;dv
+- Download de resumo e transcrição completa em formato PDF e SRT
+- Nomes de arquivo personalizados baseados no arquivo original
+- Autenticação via sistema de usuários
 
 ## Requisitos
 
 - Python 3.7+
 - Bibliotecas Python (ver `requirements.txt`)
-- Conta Google Cloud para autenticação OAuth
 - Chave de API do OpenAI
+- FFmpeg (para processamento de áudio/vídeo)
+- yt-dlp (para download de vídeos do YouTube)
 
 ## Instalação
 
@@ -36,9 +38,6 @@ Este projeto é uma aplicação Streamlit que permite aos usuários fazer upload
    Crie um arquivo `.env` na raiz do projeto com as seguintes variáveis:
    ```
    OPENAI_API_KEY=sua_chave_api_do_openai
-   GOOGLE_CLIENT_ID=seu_client_id_do_google
-   GOOGLE_CLIENT_SECRET=seu_client_secret_do_google
-   REDIRECT_URI=http://localhost:8501/
    ```
 
 ## Uso
@@ -50,23 +49,28 @@ Este projeto é uma aplicação Streamlit que permite aos usuários fazer upload
 
 2. Acesse a aplicação através do navegador (geralmente em `http://localhost:8501`).
 
-3. Faça login com sua conta Google.
+3. Faça login com suas credenciais.
 
-4. Faça upload de um vídeo e, opcionalmente, de um arquivo de transcrição em formato txt.
+4. Escolha a fonte do vídeo:
+   - **Upload Local**: Faça upload de um arquivo de vídeo
+   - **YouTube**: Cole a URL do vídeo do YouTube
+   - **Google Cloud Storage**: Cole a URL pública do vídeo
 
-5. Se não fornecer uma transcrição, use a opção de transcrição automática.
+5. Clique em "Transcrever vídeo automaticamente".
 
-6. Visualize o resumo gerado e a transcrição completa.
+6. Aguarde o processamento (pode levar alguns minutos).
 
-7. Use os links de timestamp para navegar no vídeo.
+7. Visualize o resumo gerado e a transcrição completa.
 
-8. Faça o download do resumo e da transcrição completa em formato SRT.
+8. Faça o download dos arquivos PDF e SRT gerados.
 
 ## Estrutura do Projeto
 
 - `transcrita_video.py`: Arquivo principal contendo o código da aplicação Streamlit.
+- `utils.py`: Funções auxiliares para processamento de arquivos e geração de PDFs.
 - `requirements.txt`: Lista de dependências do projeto.
-- `imagens/`: Diretório contendo imagens usadas na aplicação (como o logo do Google).
+- `images/`: Diretório contendo imagens usadas na aplicação.
+- `README_MODIFICACOES.md`: Documentação detalhada das modificações implementadas.
 - `.env`: Arquivo para armazenar variáveis de ambiente (não incluído no repositório).
 
 ## Contribuindo

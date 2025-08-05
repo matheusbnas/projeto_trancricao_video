@@ -25,6 +25,7 @@ import pickle
 from google_auth_oauthlib.flow import Flow
 import webbrowser
 import re
+import urllib.parse
 
 # CONFIGURAÇÕES GERAIS DE PASTAS
 # Configurar logging
@@ -39,44 +40,98 @@ ARQUIVO_VIDEO_TEMP = PASTA_TEMP / 'video.mp4'
 MAX_CHUNK_SIZE = 25 * 1024 * 1024  # 25 MB em bytes
 
 ########################################
-#FUNÇÃO DE PROCESSAMENTO DE AUDIO E VÍDEO
+# FUNÇÃO DE EXTRAÇÃO DO NOME DO ARQUIVO
 ########################################
-def split_audio(audio_path, chunk_duration=1200):  # 20 minutos por chunk
-    audio = AudioFileClip(audio_path)
-    duration = audio.duration
-    chunks = []
-    
-    for start in range(0, int(duration), chunk_duration):
-        end = min(start + chunk_duration, duration)
-        chunk = audio.subclip(start, end)
-        chunk_path = f"{audio_path}_{start}_{end}.mp3"
-        chunk.write_audiofile(chunk_path, bitrate="64k")  # Reduzindo a qualidade para manter o tamanho sob controle
-        
-        # Verificar o tamanho do arquivo
-        file_size = os.path.getsize(chunk_path)
-        if file_size > 25 * 1024 * 1024:  # Se o arquivo for maior que 25 MB
-            os.remove(chunk_path)  # Remove o arquivo grande
-            # Divide este chunk em dois menores
-            mid = (start + end) // 2
-            chunk1 = audio.subclip(start, mid)
-            chunk2 = audio.subclip(mid, end)
-            chunk_path1 = f"{audio_path}_{start}_{mid}.mp3"
-            chunk_path2 = f"{audio_path}_{mid}_{end}.mp3"
-            chunk1.write_audiofile(chunk_path1, bitrate="64k")
-            chunk2.write_audiofile(chunk_path2, bitrate="64k")
-            chunks.append((chunk_path1, start))
-            chunks.append((chunk_path2, mid))
+
+
+def extract_filename_from_path(file_path):
+    """
+    Extrai o nome do arquivo original de diferentes tipos de caminhos:
+    - Arquivos locais: /path/to/video.mp4 -> video
+    - URLs: https://example.com/video.mp4 -> video
+    - URLs com parâmetros: https://example.com/video.mp4?param=value -> video
+    """
+    try:
+        # Se for uma URL
+        if file_path.startswith(('http://', 'https://')):
+            # Parse da URL
+            parsed_url = urllib.parse.urlparse(file_path)
+            # Extrair o nome do arquivo do path
+            filename = os.path.basename(parsed_url.path)
         else:
-            chunks.append((chunk_path, start))
-    
-    audio.close()
-    return chunks
- 
+            # Se for um caminho local
+            filename = os.path.basename(file_path)
+
+        # Remover a extensão do arquivo
+        name_without_extension = os.path.splitext(filename)[0]
+
+        # Limpar caracteres especiais que podem causar problemas em nomes de arquivo
+        clean_name = re.sub(r'[<>:"/\\|?*]', '_', name_without_extension)
+
+        return clean_name if clean_name else "transcricao"
+
+    except Exception as e:
+        logger.warning(f"Erro ao extrair nome do arquivo: {str(e)}")
+        return "transcricao"
+
+########################################
+# FUNÇÃO DE PROCESSAMENTO DE AUDIO E VÍDEO
+########################################
+
+
+def split_audio(audio_path, chunk_duration=1200):  # 20 minutos por chunk
+    try:
+        audio = AudioFileClip(audio_path)
+        duration = audio.duration
+        chunks = []
+
+        for start in range(0, int(duration), chunk_duration):
+            end = min(start + chunk_duration, duration)
+            chunk = audio.subclip(start, end)
+            chunk_path = f"{audio_path}_{start}_{end}.mp3"
+
+            # Configurações mais robustas para write_audiofile
+            chunk.write_audiofile(
+                chunk_path,
+                bitrate="64k",
+                verbose=False,
+                logger=None
+            )
+
+            # Verificar o tamanho do arquivo
+            file_size = os.path.getsize(chunk_path)
+            if file_size > 25 * 1024 * 1024:  # Se o arquivo for maior que 25 MB
+                os.remove(chunk_path)  # Remove o arquivo grande
+                # Divide este chunk em dois menores
+                mid = (start + end) // 2
+                chunk1 = audio.subclip(start, mid)
+                chunk2 = audio.subclip(mid, end)
+                chunk_path1 = f"{audio_path}_{start}_{mid}.mp3"
+                chunk_path2 = f"{audio_path}_{mid}_{end}.mp3"
+                chunk1.write_audiofile(
+                    chunk_path1, bitrate="64k", verbose=False, logger=None)
+                chunk2.write_audiofile(
+                    chunk_path2, bitrate="64k", verbose=False, logger=None)
+                chunks.append((chunk_path1, start))
+                chunks.append((chunk_path2, mid))
+            else:
+                chunks.append((chunk_path, start))
+
+        audio.close()
+        return chunks
+
+    except Exception as e:
+        logger.error(f"Erro ao dividir áudio: {str(e)}")
+        # Fallback: retornar o arquivo original como único chunk
+        return [(audio_path, 0)]
+
 ###############################################
-#FUNÇÃO DE EXTRAÇÃO DE VÍDEO NO VIMEO E YOUTUBE
+# FUNÇÃO DE EXTRAÇÃO DE VÍDEO NO VIMEO E YOUTUBE
 ###############################################
 
 ###### VIMEO #####
+
+
 def extrair_video_id(url):
     import re
     match = re.search(r'vimeo.com/(\d+)', url)
@@ -84,7 +139,8 @@ def extrair_video_id(url):
         return match.group(1)
     else:
         return None
-    
+
+
 def get_vimeo_video_link(video_url, vimeo_client):
     try:
         video_id = extrair_video_id(video_url)
@@ -97,7 +153,8 @@ def get_vimeo_video_link(video_url, vimeo_client):
 
         # Tentar obter o link do vídeo com a menor qualidade disponível
         files = video_info.get('files', [])
-        video_link = min(files, key=lambda x: x.get('height', float('inf'))).get('link')
+        video_link = min(files, key=lambda x: x.get(
+            'height', float('inf'))).get('link')
 
         if video_link:
             return video_link
@@ -143,13 +200,14 @@ def get_authenticated_service():
             )
 
             auth_url, _ = flow.authorization_url(prompt='consent')
-            
-            print(f"Por favor, acesse esta URL para autorizar o aplicativo: {auth_url}")
+
+            print(
+                f"Por favor, acesse esta URL para autorizar o aplicativo: {auth_url}")
             webbrowser.open(auth_url)  # Abre o navegador automaticamente
-            
+
             # Aguarda o usuário inserir o código de autorização
             auth_code = input("Cole o código de autorização aqui: ")
-            
+
             flow.fetch_token(code=auth_code)
             credentials = flow.credentials
 
@@ -158,6 +216,7 @@ def get_authenticated_service():
             pickle.dump(credentials, token)
 
     return build("youtube", "v3", credentials=credentials)
+
 
 def get_video_details(youtube, video_id):
     try:
@@ -174,6 +233,7 @@ def get_video_details(youtube, video_id):
     except Exception as e:
         logger.error(f"Erro ao obter detalhes do vídeo do YouTube: {str(e)}")
         return None
+
 
 def get_video_download_url(youtube, video_id):
     try:
@@ -192,12 +252,14 @@ def get_video_download_url(youtube, video_id):
         else:
             return None
     except Exception as e:
-        logger.error(f"Erro ao obter URL de download do vídeo do YouTube: {str(e)}")
+        logger.error(
+            f"Erro ao obter URL de download do vídeo do YouTube: {str(e)}")
         return None
-    
+
 ########################################
-#FUNÇÃO DE PROCESSAMENTO E DOWNLOAD DO ARQUIVO SRT
+# FUNÇÃO DE PROCESSAMENTO E DOWNLOAD DO ARQUIVO SRT
 ########################################
+
 
 def processa_srt(srt_content):
     subtitles = list(srt.parse(srt_content))
@@ -210,12 +272,21 @@ def processa_srt(srt_content):
     return transcript_text
 
 
-def create_download_link(file_path, link_text):
+def create_download_link(file_path, link_text, custom_filename=None):
+    """
+    Cria um link de download para um arquivo com nome personalizado.
+    """
     with open(file_path, 'rb') as f:
         data = f.read()
     b64 = base64.b64encode(data).decode()
-    href = f'<a href="data:file/txt;base64,{b64}" download="{os.path.basename(file_path)}">{link_text}</a>'
+
+    # Usar o nome personalizado se fornecido, senão usar o nome original do arquivo
+    download_filename = custom_filename if custom_filename else os.path.basename(
+        file_path)
+
+    href = f'<a href="data:file/txt;base64,{b64}" download="{download_filename}">{link_text}</a>'
     return href
+
 
 def processa_srt_sem_timestamp(srt_content):
     subtitles = list(srt.parse(srt_content))
@@ -226,29 +297,33 @@ def processa_srt_sem_timestamp(srt_content):
         transcript_text += f"{sub.content}\n"
     return transcript_text
 
+
 def gera_srt_do_resumo(resumo, duracao_total_segundos):
     linhas = resumo.split('\n')
     subtitles = []
     tempo_por_linha = duracao_total_segundos / len(linhas)
-    
+
     for i, linha in enumerate(linhas, start=1):
         if linha.strip():
-            start_time = datetime.timedelta(seconds=int((i-1) * tempo_por_linha))
+            start_time = datetime.timedelta(
+                seconds=int((i-1) * tempo_por_linha))
             end_time = datetime.timedelta(seconds=int(i * tempo_por_linha))
-            
+
             # Extrair o timestamp do início da linha (se existir)
             match = re.match(r'\[(\d{2}:\d{2})\] - (.+)', linha)
             if match:
                 timestamp, content = match.groups()
                 minutos, segundos = map(int, timestamp.split(':'))
-                start_time = datetime.timedelta(minutes=minutos, seconds=segundos)
-                end_time = start_time + datetime.timedelta(seconds=int(tempo_por_linha))
+                start_time = datetime.timedelta(
+                    minutes=minutos, seconds=segundos)
+                end_time = start_time + \
+                    datetime.timedelta(seconds=int(tempo_por_linha))
             else:
                 content = linha
-            
+
             # Limpa os asteriscos do conteúdo
             content = content.strip().replace('*', '')
-            
+
             subtitle = srt.Subtitle(
                 index=i,
                 start=start_time,
@@ -256,9 +331,10 @@ def gera_srt_do_resumo(resumo, duracao_total_segundos):
                 content=content
             )
             subtitles.append(subtitle)
-    
+
     # Gera o conteúdo SRT limpo
     return srt.compose(subtitles)
+
 
 def ajusta_tempo_srt(srt_content, offset):
     subtitles = list(srt.parse(srt_content))
@@ -270,25 +346,34 @@ def ajusta_tempo_srt(srt_content, offset):
     return srt.compose(subtitles)
 
 ########################################
-#FUNÇÃO DE CRIAÇÃO E DOWNLOAD DE ARQUIVO PDF
+# FUNÇÃO DE CRIAÇÃO E DOWNLOAD DE ARQUIVO PDF
 ########################################
+
+
 def create_pdf(content, filename):
+    """
+    Cria um PDF com o conteúdo fornecido e retorna um buffer.
+    O filename é usado apenas para referência, não afeta o conteúdo do PDF.
+    """
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
-    
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72,
+                            leftMargin=72, topMargin=72, bottomMargin=18)
+
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name='Justify', alignment=TA_JUSTIFY))
     flowables = []
 
     # Dividir o conteúdo em parágrafos
-    paragraphs = content.split('\n\n')  # Assume que parágrafos são separados por linha em branco
+    # Assume que parágrafos são separados por linha em branco
+    paragraphs = content.split('\n\n')
 
     for paragraph in paragraphs:
         if paragraph.strip():
             # Remove qualquer numeração ou formatação especial
             clean_paragraph = re.sub(r'^\d+\.\s*', '', paragraph.strip())
-            clean_paragraph = re.sub(r'\*\*(.*?)\*\*', r'\1', clean_paragraph)  # Remove negrito (**)
-            
+            clean_paragraph = re.sub(
+                r'\*\*(.*?)\*\*', r'\1', clean_paragraph)  # Remove negrito (**)
+
             p = Paragraph(clean_paragraph, styles['Justify'])
             flowables.append(p)
             flowables.append(Spacer(1, 12))  # Espaçamento entre parágrafos
@@ -297,7 +382,11 @@ def create_pdf(content, filename):
     buffer.seek(0)
     return buffer
 
+
 def create_download_link_pdf(pdf_buffer, link_text, filename):
+    """
+    Cria um link de download para um PDF com nome de arquivo personalizado.
+    """
     b64 = base64.b64encode(pdf_buffer.getvalue()).decode()
     href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">{link_text}</a>'
     return href
